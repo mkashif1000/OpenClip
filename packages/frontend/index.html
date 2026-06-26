@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenClip — AI Viral Clip Creator</title>
+    <meta name="description" content="OpenClip: Create viral short-form clips from long videos. Powered by AI, runs 100% in your browser. No upload, no server — your videos stay on your device." />
+    <meta name="theme-color" content="#0f1117" />
+    <!-- Caption/title font catalog. CSS is tiny; each woff2 only downloads when
+         a glyph actually uses that family, so listing many families is cheap.
+         The render worker loads these separately via fontLoader (its
+         OffscreenCanvas has its own FontFaceSet). -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Anton&family=Archivo+Black&family=Bangers&family=Barlow:wght@600;700;800&family=Bebas+Neue&family=Inter:wght@400;600;700;800&family=Montserrat:wght@600;700;800&family=Oswald:wght@500;600;700&family=Poppins:wght@600;700;800&family=Roboto:wght@500;700;900&family=Rubik:wght@600;700;800&family=Teko:wght@500;600;700&display=swap"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

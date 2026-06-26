@@ -1,0 +1,31 @@
+name: CI
+
+# Runs on every PR and on pushes to the long-lived branches.
+# A red check here blocks the merge, so broken code never reaches main.
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Type-check & build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `npm run build` = tsc -b (type-check) + vite build (production bundle)
+      - name: Build
+        run: npm run build

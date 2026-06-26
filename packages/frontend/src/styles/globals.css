@@ -1,0 +1,312 @@
+@import "tailwindcss";
+
+@theme {
+  /* Monochrome black/white palette with glass-friendly tokens.
+     Existing utilities (bg-surface, text-text-muted, …) automatically pick
+     up the new values so the whole app re-skins without per-component edits. */
+
+  /* Surfaces — layered near-blacks for depth */
+  --color-background: #08080a;
+  --color-surface: #0c0c10;
+  --color-panel: #131318;
+  --color-panel-light: #1c1c22;
+  --color-input: #0a0a0e;
+
+  /* Borders — white at low opacity so they read as hairlines on glass */
+  --color-border: rgba(255, 255, 255, 0.07);
+  --color-border-light: rgba(255, 255, 255, 0.14);
+
+  /* Text — pure white at varying opacities for hierarchy */
+  --color-text: #fafafa;
+  --color-text-muted: rgba(255, 255, 255, 0.62);
+  --color-text-dim: rgba(255, 255, 255, 0.38);
+
+  /* Accent — white IS the accent in a true black/white scheme.
+     Primary CTAs become white-on-near-black, secondary surfaces use
+     low-opacity white tints. */
+  --color-accent: #ffffff;
+  --color-accent-hover: #f0f0f4;
+  --color-accent-soft: rgba(255, 255, 255, 0.16);
+  --color-accent-blue: #ffffff;        /* kept name for compat — same accent */
+  --color-accent-blue-hover: #f0f0f4;
+
+  /* Status — kept but muted so monochrome stays dominant */
+  --color-success: #4ade80;
+  --color-warning: #fbbf24;
+  --color-error: #f87171;
+  --color-info: rgba(255, 255, 255, 0.72);
+
+  --font-sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Consolas", monospace;
+
+  /* Glass + depth shadows tuned for the dark palette */
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.45), 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 18px 60px rgba(0, 0, 0, 0.6);
+  --shadow-glow: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+/* ─── Glass utilities (Tailwind 4 custom utilities) ─────────────────────────
+   Use as `glass`, `glass-strong`, etc. Composes with normal Tailwind. */
+@utility glass {
+  background: rgba(255, 255, 255, 0.035);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 12px 36px rgba(0, 0, 0, 0.35);
+}
+
+@utility glass-strong {
+  background: rgba(255, 255, 255, 0.055);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 18px 50px rgba(0, 0, 0, 0.45);
+}
+
+@utility glass-subtle {
+  background: rgba(255, 255, 255, 0.02);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Animated linear gradient hairline — used along the top of glass cards. */
+@utility hairline-top {
+  position: relative;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.16), transparent);
+    pointer-events: none;
+  }
+}
+
+/* ─── Scrollbars — minimal, monochrome ──────────────────────────────────── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.10);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: var(--color-background);
+  /* Layered depth: faint top vignette + ambient floor glow.
+     No color — pure luminance gradients so the monochrome reads as polished. */
+  background-image:
+    radial-gradient(1200px 600px at 18% -10%, rgba(255, 255, 255, 0.045), transparent 70%),
+    radial-gradient(900px 500px at 95% 110%, rgba(255, 255, 255, 0.025), transparent 70%);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+input, textarea, select {
+  font-family: inherit;
+}
+
+/* ─── Transitions on interactive elements ─────────────────────────────────
+   Scoped to color/shadow/opacity so width-based animations (progress bar) and
+   transform-based motion (active scale) don't get clipped. */
+a, button, select, input, textarea, [role="button"], summary {
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease,
+    box-shadow 0.18s ease,
+    opacity 0.18s ease,
+    transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+button:active:not(:disabled),
+[role="button"]:active {
+  transform: scale(0.985);
+}
+
+/* Monochrome focus ring */
+:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.55);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+::selection {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+}
+
+/* ─── Motion keyframes ────────────────────────────────────────────────────
+   Used by `animate-*` utility classes. Respect prefers-reduced-motion. */
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 0.9; }
+  50% { opacity: 0.45; }
+}
+
+@keyframes progress-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* Stagger-friendly animation utility */
+@utility animate-rise {
+  animation: fade-in-up 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@utility animate-rise-slow {
+  animation: fade-in-up 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@utility animate-fade-in {
+  animation: fade-in 0.25s ease-out both;
+}
+
+@utility animate-soft-pulse {
+  animation: pulse-soft 1.6s ease-in-out infinite;
+}
+
+/* Shimmer track — used on top of progress bars during active processing */
+@utility progress-shimmer {
+  position: relative;
+  overflow: hidden;
+
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0.35) 50%,
+      transparent 100%
+    );
+    animation: shimmer 1.8s ease-in-out infinite;
+    pointer-events: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* ─── iOS-style toggle switch ─────────────────────────────────────────────
+   Apply `.switch` on a checkbox to render it as a pill toggle. Smooth thumb
+   animation, monochrome colors that read as on/off without color cues. */
+.switch {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 36px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+  flex-shrink: 0;
+}
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  background: #f5f5f7;
+  border-radius: 50%;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  transition: left 0.22s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.18s ease;
+}
+.switch:checked {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: rgba(255, 255, 255, 0.9);
+}
+.switch:checked::after {
+  left: 18px;
+  background: #0a0a0e;
+}
+.switch:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ─── Timeline-specific (preserved from prior theme) ─────────────────────
+   Higher-contrast scrollbar so the timeline drag handle is always grabbable. */
+.timeline-scroll-container {
+  scrollbar-width: auto !important;
+  scrollbar-color: rgba(255, 255, 255, 0.35) rgba(255, 255, 255, 0.05) !important;
+}
+.timeline-scroll-container::-webkit-scrollbar {
+  height: 16px !important;
+  width: 16px !important;
+  display: block !important;
+}
+.timeline-scroll-container::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04) !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+.timeline-scroll-container::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.30) !important;
+  border-radius: 8px !important;
+  border: 3px solid #08080a !important;
+  min-width: 50px !important;
+}
+.timeline-scroll-container::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.45) !important;
+}
+.timeline-scroll-container::-webkit-scrollbar-thumb:active {
+  background: rgba(255, 255, 255, 0.6) !important;
+}
+
+.timeline-resize-handle {
+  cursor: row-resize;
+  user-select: none;
+}
+.timeline-resize-handle:hover,
+.timeline-resize-handle.resizing {
+  background-color: rgba(255, 255, 255, 0.18) !important;
+}

@@ -1,0 +1,21 @@
+name: Release
+
+# Watches conventional commits on main. It maintains a rolling "Release PR"
+# that bumps the version + updates CHANGELOG.md. When you merge that PR it
+# tags the release (vX.Y.Z) and publishes a GitHub Release automatically.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Config + manifest files at the repo root drive the behavior.

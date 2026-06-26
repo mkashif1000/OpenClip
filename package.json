@@ -1,0 +1,14 @@
+{
+  "name": "openclip",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": ["packages/frontend", "packages/shared"],
+  "scripts": {
+    "dev": "npm run dev --workspace=@viral-clipper/frontend",
+    "build": "npm run build --workspace=@viral-clipper/frontend",
+    "preview": "npm run preview --workspace=@viral-clipper/frontend"
+  },
+  "devDependencies": {
+    "typescript": "~5.6.3"
+  }
+}
