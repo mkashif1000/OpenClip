@@ -12,6 +12,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Copy, Check, Wand2, ExternalLink, Loader2, ClipboardPaste, AlertTriangle,
+  ChevronUp, ChevronDown,
 } from 'lucide-react';
 import { useProjectStore } from '@/stores/projectStore';
 import { useClipStore } from '@/stores/clipStore';
@@ -32,6 +33,8 @@ export function AiClipsGenerator() {
 
   const [extra, setExtra] = useState('');
   const [numClips, setNumClips] = useState(8);
+  const [minLen, setMinLen] = useState(20);
+  const [maxLen, setMaxLen] = useState(90);
   const [wantTitles, setWantTitles] = useState(true);
 
   const [copied, setCopied] = useState(false);
@@ -61,8 +64,8 @@ export function AiClipsGenerator() {
   }, [srtId]);
 
   const prompt = useMemo(
-    () => buildClipPrompt({ transcript, numClips, wantTitles, extra }),
-    [transcript, numClips, wantTitles, extra],
+    () => buildClipPrompt({ transcript, numClips, wantTitles, minLen, maxLen, extra }),
+    [transcript, numClips, wantTitles, minLen, maxLen, extra],
   );
 
   const copyPrompt = async () => {
@@ -121,18 +124,25 @@ export function AiClipsGenerator() {
           placeholder="e.g. Prioritize clips about pricing. Always include the part where he mentions the lawsuit."
           className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-text text-sm focus:outline-none focus:border-white/30 resize-none placeholder:text-text-dim"
         />
-        <div className="flex flex-wrap items-center gap-2.5 mt-3">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-black/30 border border-white/10">
-            <span className="text-[11px] text-text-muted">Clips</span>
-            <input
-              type="number" min={1} max={50} value={numClips}
-              onChange={(e) => setNumClips(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
-              className="w-12 bg-transparent text-text text-sm font-medium focus:outline-none text-center"
-            />
-          </div>
-          <label className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-black/30 border border-white/10 cursor-pointer select-none">
-            <input type="checkbox" className="switch" checked={wantTitles} onChange={(e) => setWantTitles(e.target.checked)} />
-            <span className="text-[12px] text-text">Generate titles</span>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mt-3">
+          <NumField
+            label="Clips" value={numClips} min={1} max={50}
+            onChange={(v) => setNumClips(v)}
+          />
+          <NumField
+            label="Min length" suffix="s" value={minLen} min={5} max={maxLen}
+            onChange={(v) => setMinLen(Math.min(v, maxLen))}
+          />
+          <NumField
+            label="Max length" suffix="s" value={maxLen} min={minLen} max={600}
+            onChange={(v) => setMaxLen(Math.max(v, minLen))}
+          />
+          <label className="flex flex-col justify-center gap-1.5 px-3 py-2 rounded-lg bg-black/30 border border-white/10 cursor-pointer select-none">
+            <span className="text-[10px] uppercase tracking-wide text-text-dim">Titles</span>
+            <div className="flex items-center gap-2">
+              <input type="checkbox" className="switch" checked={wantTitles} onChange={(e) => setWantTitles(e.target.checked)} />
+              <span className="text-[12px] text-text">{wantTitles ? 'On' : 'Off'}</span>
+            </div>
           </label>
         </div>
       </Step>
@@ -228,6 +238,47 @@ function Step({
         </div>
       </div>
       {children}
+    </div>
+  );
+}
+
+/** A compact labeled number field with custom +/- steppers (so it reads
+ *  cleanly on the dark theme instead of the cramped native spinner). */
+function NumField({
+  label, value, min, max, suffix, onChange,
+}: {
+  label: string; value: number; min: number; max: number;
+  suffix?: string; onChange: (v: number) => void;
+}) {
+  const clamp = (v: number) => Math.max(min, Math.min(max, v));
+  return (
+    <div className="flex flex-col gap-1 px-3 py-2 rounded-lg bg-black/30 border border-white/10 focus-within:border-white/30">
+      <span className="text-[10px] uppercase tracking-wide text-text-dim">{label}</span>
+      <div className="flex items-center gap-1">
+        <input
+          type="number" min={min} max={max} value={value}
+          onChange={(e) => onChange(clamp(Number(e.target.value) || min))}
+          className="w-full min-w-0 bg-transparent text-text text-sm font-semibold focus:outline-none
+                     [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+        />
+        {suffix && <span className="text-[11px] text-text-muted shrink-0">{suffix}</span>}
+        <div className="flex flex-col -my-0.5 shrink-0">
+          <button
+            type="button" tabIndex={-1} aria-label={`Increase ${label}`}
+            onClick={() => onChange(clamp(value + 1))}
+            className="h-3.5 w-5 flex items-center justify-center rounded-sm text-text-dim hover:text-text hover:bg-white/10"
+          >
+            <ChevronUp className="w-3 h-3" />
+          </button>
+          <button
+            type="button" tabIndex={-1} aria-label={`Decrease ${label}`}
+            onClick={() => onChange(clamp(value - 1))}
+            className="h-3.5 w-5 flex items-center justify-center rounded-sm text-text-dim hover:text-text hover:bg-white/10"
+          >
+            <ChevronDown className="w-3 h-3" />
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

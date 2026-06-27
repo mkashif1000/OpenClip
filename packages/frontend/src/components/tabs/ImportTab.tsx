@@ -238,8 +238,10 @@ function ProgressStrip({
 }: {
   steps: Array<{ num: number; label: string; done: boolean; active: boolean }>;
 }) {
-  // Fraction of the strip filled (number of completed steps / total).
-  const completedFrac = steps.filter((s) => s.done).length / (steps.length - 1);
+  // Fill the track only up to the LAST completed node (not beyond it), so the
+  // bright line never runs through a pending step's number.
+  const doneCount = steps.filter((s) => s.done).length;
+  const completedFrac = Math.max(0, Math.min(1, (doneCount - 1) / (steps.length - 1)));
 
   return (
     <div className="relative">
@@ -259,8 +261,8 @@ function ProgressStrip({
                 s.done
                   ? 'bg-white text-black border-white shadow-soft'
                   : s.active
-                    ? 'bg-white/8 text-text border-white/40 ring-2 ring-white/15 animate-soft-pulse'
-                    : 'bg-white/4 text-text-dim border-white/8',
+                    ? 'bg-panel text-text border-white/40 ring-2 ring-white/15 animate-soft-pulse'
+                    : 'bg-panel text-text-dim border-white/8',
               )}
             >
               {s.done ? <Check className="w-3.5 h-3.5" strokeWidth={2.5} /> : s.num}
