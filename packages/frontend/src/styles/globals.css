@@ -130,6 +130,24 @@ input, textarea, select {
   font-family: inherit;
 }
 
+/* ─── Native form controls — keep legible on the dark theme ───────────────
+   `color-scheme: dark` tells the browser to paint native popups (the <select>
+   dropdown list, date pickers, autofill, scrollbars) with a dark surface and
+   light text instead of the OS default white-on-white. The explicit <option>
+   rule is a belt-and-suspenders fallback for engines that ignore it. */
+:root {
+  color-scheme: dark;
+}
+
+select {
+  color: var(--color-text);
+}
+select option,
+select optgroup {
+  background-color: #15151b;
+  color: #fafafa;
+}
+
 /* ─── Transitions on interactive elements ─────────────────────────────────
    Scoped to color/shadow/opacity so width-based animations (progress bar) and
    transform-based motion (active scale) don't get clipped. */
