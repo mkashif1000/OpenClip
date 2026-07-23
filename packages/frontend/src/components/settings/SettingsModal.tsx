@@ -64,7 +64,7 @@ export function SettingsModal() {
                   href={REFERRAL_URL}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-hover text-white text-xs font-medium transition-colors"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-hover text-black text-xs font-medium transition-colors"
                 >
                   Get $100 free credits <ExternalLink className="w-3 h-3" />
                 </a>
@@ -85,7 +85,7 @@ export function SettingsModal() {
                 />
                 <button
                   onClick={handleSave}
-                  className="px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover text-white text-xs font-medium transition-colors shrink-0"
+                  className="px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover text-black text-xs font-medium transition-colors shrink-0"
                 >
                   {saved ? 'Saved' : 'Save'}
                 </button>

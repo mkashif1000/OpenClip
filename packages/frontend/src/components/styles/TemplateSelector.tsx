@@ -62,7 +62,7 @@ export function TemplateSelector() {
           />
           <button
             onClick={handleSave}
-            className="px-3 py-1.5 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover transition-colors"
+            className="px-3 py-1.5 rounded-lg bg-accent text-black text-sm font-medium hover:bg-accent-hover transition-colors"
           >
             Save
           </button>

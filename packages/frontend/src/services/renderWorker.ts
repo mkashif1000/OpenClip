@@ -35,6 +35,7 @@ export interface RenderWorkerRequest {
   frameSrcTimes: Float64Array;
   faceCenters: (FaceCenter | null)[] | null;
   regionCrops?: Array<{ x: number; y: number; w: number; h: number }> | null;
+  layoutRange?: { start: number; end: number } | null;
   demuxStartSec: number;
   demuxDurationSec: number;
 }
@@ -103,6 +104,7 @@ ctx.onmessage = async (e: MessageEvent) => {
       frameSrcTimes: req.frameSrcTimes,
       faceCenters: req.faceCenters,
       regionCrops: req.regionCrops ?? null,
+      layoutRange: req.layoutRange ?? null,
       demuxStartSec: req.demuxStartSec,
       demuxDurationSec: req.demuxDurationSec,
       signal: controller.signal,

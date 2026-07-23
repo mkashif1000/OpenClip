@@ -59,6 +59,12 @@ export interface ClipEdits {
    */
   regionCrops?: Array<{ x: number; y: number; w: number; h: number }>;
   /**
+   * Optional time window (seconds relative to clip start) during which the
+   * split/gameplay layout is shown; outside it the clip renders full-frame.
+   * Null/absent = the layout covers the whole clip.
+   */
+  layoutRange?: { start: number; end: number } | null;
+  /**
    * Per-word color tier for the title (multi-color titles). One entry per
    * whitespace-separated word of the active title text:
    *   0 = base (title.font_color), 1 = title.highlight_color, 2 = title.accent_color.
@@ -96,6 +102,8 @@ export interface SubtitleStyle {
   outline_width: number;
   position: string;
   margin_v: number | null;
+  /** Max caption width as a % of frame width (controls wrapping). */
+  max_width?: number;
   preset?: CaptionPreset;
 }
 
@@ -115,6 +123,8 @@ export interface TitleStyle {
   highlight_color?: string;
   /** Accent color for tier-2 title words (multi-color titles). */
   accent_color?: string;
+  /** Max title width as a % of frame width (width-based wrapping). */
+  max_width?: number;
 }
 
 export interface ExportSettings {
@@ -133,6 +143,10 @@ export interface ExportSettings {
   broll?: boolean;
   /** Corner radius (output px) of the inset video in the 'boxed' layout. */
   box_radius?: number;
+  /** Boxed inset geometry as % of frame (centered horizontally). */
+  box_width?: number;
+  box_height?: number;
+  box_y?: number;
 }
 
 export interface StyleConfig {
@@ -292,4 +306,7 @@ export const DEFAULT_EXPORT: ExportSettings = {
   face_tracking: true,
   broll: false,
   box_radius: 40,
+  box_width: 84,
+  box_height: 52,
+  box_y: 20,
 };

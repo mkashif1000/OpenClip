@@ -42,14 +42,22 @@ interface RemotionPreviewProps {
   brolls?: Array<{ src: string; startFrame: number; durationInFrames: number }>;
   /** Override the title font family (clip.edits.titleFont). */
   titleFontName?: string;
-  /** Force a multi-source split layout (gameplay / split-2v / split-3 / split-4). */
+  /** Force a multi-source split layout (gameplay / split-2v / split-2h / split-3 / split-4). */
   splitLayout?: SplitLayout;
+  /** Per-region source crops for split layouts (normalized [0,1], region order). */
+  regionCrops?: Array<{ x: number; y: number; w: number; h: number }>;
+  /** Clip-relative window (seconds) the split layout applies in. */
+  splitRange?: { start: number; end: number } | null;
   /** Per-word color tiers for the title (multi-color titles). */
   titleWordColors?: number[];
   /** Render the boxed layout (centered rounded inset on black). */
   boxed?: boolean;
   /** Boxed inset corner radius in composition px. */
   boxRadiusPx?: number;
+  /** Boxed inset geometry as % of frame (centered horizontally). */
+  boxWidthPct?: number;
+  boxHeightPct?: number;
+  boxYPct?: number;
 }
 
 export function RemotionPreview({
@@ -75,9 +83,14 @@ export function RemotionPreview({
   brolls,
   titleFontName,
   splitLayout,
+  regionCrops,
+  splitRange,
   titleWordColors,
   boxed,
   boxRadiusPx,
+  boxWidthPct,
+  boxHeightPct,
+  boxYPct,
 }: RemotionPreviewProps) {
   const { styles } = useStyleStore();
   const { export: exp } = styles;
@@ -115,17 +128,20 @@ export function RemotionPreview({
     titlePositionY: title.position_y,
     titleBorderRadius: title.border_radius,
     titleMaxChars: title.max_chars_per_line ?? (isVertical ? 25 : 45),
+    ...(title.max_width != null ? { titleMaxWidthPct: title.max_width } : {}),
     titleFontName: titleFontName || title.font_name,
     titleHighlightColor: title.highlight_color ?? '#FFD23F',
     titleAccentColor: title.accent_color ?? '#FF4D4D',
     ...(titleWordColors && titleWordColors.length ? { titleWordColors } : {}),
     // Boxed layout (centered rounded inset) — only meaningful for ClipComposition.
-    ...(boxed ? { boxed: true, boxRadiusPx } : {}),
+    ...(boxed ? { boxed: true, boxRadiusPx, boxWidthPct, boxHeightPct, boxYPct } : {}),
     // Pass through B-roll overlays so the live preview shows what the export
     // will actually render at each broll span.
     ...(brolls && brolls.length ? { brolls } : {}),
     // MultiSplitComposition needs the layout name to pick its regions.
     ...(splitLayout ? { layout: splitLayout } : {}),
+    ...(splitLayout && regionCrops && regionCrops.length ? { regionCrops } : {}),
+    ...(splitLayout && splitRange ? { splitStartSec: splitRange.start, splitEndSec: splitRange.end } : {}),
     // Subtitle style
     subtitlePrimaryColor: subtitle.primary_color,
     subtitleHighlightColor: subtitle.highlight_color,
@@ -135,6 +151,7 @@ export function RemotionPreview({
     subtitleFontName: subtitle.font_name,
     subtitleBold: subtitle.bold,
     subtitleMarginV: subtitle.margin_v ?? (isVertical ? 120 : 60),
+    ...(subtitle.max_width != null ? { subtitleMaxWidthPct: subtitle.max_width } : {}),
     subtitlePreset: subtitle.preset ?? 'karaoke',
     // Background music
     ...(musicSrc ? { musicSrc, musicVolume: musicVolume ?? 0.1 } : {}),

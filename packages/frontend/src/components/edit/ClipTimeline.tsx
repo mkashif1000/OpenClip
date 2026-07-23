@@ -49,6 +49,7 @@ type DragKind =
   | { type: 'broll-resize-l'; id: string }
   | { type: 'broll-resize-r'; id: string }
   | { type: 'scrub' }
+  | { type: 'pan'; startClientX: number; startCenter: number; startSpan: number }
   | null;
 
 const MIN_BROLL_LEN = 0.5;
@@ -62,8 +63,20 @@ export function ClipTimeline({
   const railRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<DragKind>(null);
 
-  const clipStart = clip.start_time;
-  const clipEnd = clip.end_time;
+  // Trim edits are buffered locally while dragging and committed ONCE on
+  // pointer-up. Committing per pointermove wrote to the store + IndexedDB on
+  // every mouse move — visibly janky — and re-derived the rail window from
+  // the moving clip range, so the rail rescaled under the cursor (the
+  // "behaves weirdly at the edges" feedback loop).
+  const [pendingTrim, setPendingTrim] = useState<{ s: number; e: number } | null>(null);
+  const pendingTrimRef = useRef<{ s: number; e: number } | null>(null);
+  const setPending = (v: { s: number; e: number } | null) => {
+    pendingTrimRef.current = v;
+    setPendingTrim(v);
+  };
+
+  const clipStart = pendingTrim?.s ?? clip.start_time;
+  const clipEnd = pendingTrim?.e ?? clip.end_time;
   const clipDur = Math.max(clipEnd - clipStart, 0.001);
 
   // ─── Zoomable rail window ──────────────────────────────────────────
@@ -79,24 +92,39 @@ export function ClipTimeline({
   const [zoom, setZoom] = useState(1);
   const [focalSec, setFocalSec] = useState<number | null>(null);
 
+  // The rail's base window is FROZEN to the clip range at selection time.
+  // Deriving it from the live clip range meant every trim-drag move rescaled
+  // the rail under the cursor — the coordinate system the drag was mapping
+  // through — producing runaway / erratic edge drags.
+  const anchorRef = useRef({ start: clip.start_time, end: clip.end_time });
+  const lastClipIdRef = useRef(clip.clip_id);
+  if (lastClipIdRef.current !== clip.clip_id) {
+    // Re-freeze the anchor synchronously on clip change (no one-frame flicker).
+    lastClipIdRef.current = clip.clip_id;
+    anchorRef.current = { start: clip.start_time, end: clip.end_time };
+  }
   useEffect(() => {
+    // Reset view state (zoom/pan/buffered-trim) when the selected clip changes.
     setZoom(1);
     setFocalSec(null);
+    setPending(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clip.clip_id]);
 
-  // Base unzoomed span = clip + 60% pad each side, clamped to video bounds.
-  const basePad = Math.max(10, clipDur * 0.6);
-  const baseStart = Math.max(0, clipStart - basePad);
-  const baseEnd = Math.min(videoDurationSec ?? clipEnd + basePad, clipEnd + basePad);
+  const anchorDur = Math.max(anchorRef.current.end - anchorRef.current.start, 0.001);
+  const basePad = Math.max(10, anchorDur * 0.6);
+  const baseStart = Math.max(0, anchorRef.current.start - basePad);
+  const baseEnd = Math.min(
+    videoDurationSec ?? anchorRef.current.end + basePad,
+    anchorRef.current.end + basePad,
+  );
   const baseSpan = Math.max(0.001, baseEnd - baseStart);
 
-  // Auto fit-out: ensure clip range is always visible even if user dragged trim
-  // handles past the current zoom window.
-  const requiredSpan = (clipEnd - clipStart) * 1.05;
-  const effectiveZoom = Math.min(zoom, baseSpan / requiredSpan);
-
+  const effectiveZoom = zoom;
   const span = baseSpan / effectiveZoom;
-  const center = focalSec ?? (clipStart + clipEnd) / 2;
+  // Default center = FROZEN anchor midpoint (not the live/pending clip range),
+  // so the rail stays put while you drag a trim handle. Panning sets focalSec.
+  const center = focalSec ?? (anchorRef.current.start + anchorRef.current.end) / 2;
   let railStart = center - span / 2;
   let railEnd = center + span / 2;
   if (railStart < 0) { railEnd += -railStart; railStart = 0; }
@@ -106,6 +134,15 @@ export function ClipTimeline({
     railEnd = videoDurationSec;
   }
   const railSpan = Math.max(railEnd - railStart, 0.001);
+
+  // Clamp a pan target so the visible window never leaves [0, videoDuration].
+  // This is what stops the rail from "sliding out of the screen".
+  const clampCenter = useCallback((c: number, forSpan: number) => {
+    const half = forSpan / 2;
+    if (videoDurationSec == null) return Math.max(half, c);
+    if (videoDurationSec <= forSpan) return videoDurationSec / 2;
+    return Math.min(Math.max(c, half), videoDurationSec - half);
+  }, [videoDurationSec]);
 
   const zoomBy = useCallback((factor: number, anchorSec?: number) => {
     setZoom((z) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z * factor)));
@@ -132,8 +169,12 @@ export function ClipTimeline({
   const containerRef = useRef<HTMLDivElement>(null);
   const railStartRef = useRef(railStart);
   const railSpanRef = useRef(railSpan);
+  const centerRef = useRef(center);
+  const clampCenterRef = useRef(clampCenter);
   railStartRef.current = railStart;
   railSpanRef.current = railSpan;
+  centerRef.current = center;
+  clampCenterRef.current = clampCenter;
   useEffect(() => {
     const el = containerRef.current;
     const rail = railRef.current;
@@ -142,6 +183,16 @@ export function ClipTimeline({
       e.preventDefault();
       e.stopPropagation();
       const rect = rail.getBoundingClientRect();
+      // Horizontal wheel / trackpad swipe / Shift+wheel = PAN. Everything
+      // else = zoom toward the cursor.
+      const horizontal = Math.abs(e.deltaX) > Math.abs(e.deltaY);
+      if (horizontal || e.shiftKey) {
+        const delta = horizontal ? e.deltaX : e.deltaY;
+        const px = e.deltaMode === 0 ? delta : delta * 30;
+        const dSec = (px / Math.max(rect.width, 1)) * railSpanRef.current;
+        setFocalSec(clampCenterRef.current(centerRef.current + dSec, railSpanRef.current));
+        return;
+      }
       const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
       const cursorTime = railStartRef.current + (x / Math.max(rect.width, 1)) * railSpanRef.current;
       const sensitivity = e.deltaMode === 0 ? 0.0035 : 0.18;
@@ -162,59 +213,116 @@ export function ClipTimeline({
     return ((sec - railStart) / railSpan) * 100;
   }, [railStart, railSpan]);
 
+  /** Clamp a [startPct,endPct] span into the visible 0–100 window.
+   *  Returns null when fully off-screen — chips must never bleed outside. */
+  const clampRange = (startPct: number, endPct: number) => {
+    const left = Math.max(0, startPct);
+    const right = Math.min(100, endPct);
+    return right - left <= 0 ? null : { left, width: right - left };
+  };
+
+  // ─── Adaptive time ruler ────────────────────────────────────────────
+  // Pick a tick step that yields ~5–10 labels for the current zoom.
+  const TICK_STEPS = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
+  const tickStep = TICK_STEPS.find((s) => railSpan / s <= 10) ?? 600;
+  const ticks: number[] = [];
+  for (let t = Math.ceil(railStart / tickStep) * tickStep; t <= railEnd + 1e-6; t += tickStep) {
+    ticks.push(Number(t.toFixed(3)));
+  }
+  const fmtTick = (t: number) => {
+    if (t >= 60) {
+      const m = Math.floor(t / 60);
+      const s = t - m * 60;
+      return `${m}:${s < 10 ? '0' : ''}${Number.isInteger(s) ? s : s.toFixed(1)}`;
+    }
+    return Number.isInteger(t) ? `${t}s` : `${t.toFixed(2).replace(/0$/, '')}s`;
+  };
+
   const brolls = clip.edits?.brolls ?? [];
 
-  // ─── Global pointer handlers while dragging ─────────────────────────
+  // Live values read INSIDE the once-bound pointer handlers via refs, so the
+  // drag listener never re-subscribes mid-drag (re-subscribing dropped pointer
+  // events → the erratic edge behavior). The opposite trim edge / b-roll clamps
+  // use the COMMITTED clip bounds, which are stable across a single drag.
+  const brollsRef = useRef(brolls); brollsRef.current = brolls;
+  const committedRef = useRef({ s: clip.start_time, e: clip.end_time });
+  committedRef.current = { s: clip.start_time, e: clip.end_time };
+  const videoDurRef = useRef(videoDurationSec); videoDurRef.current = videoDurationSec;
+  const cbRef = useRef({ onTrim, onBrollChange, onSeek });
+  cbRef.current = { onTrim, onBrollChange, onSeek };
+
+  // ─── Global pointer handlers while dragging (bound ONCE per drag) ────
   useEffect(() => {
     if (!drag) return;
     const onMove = (e: PointerEvent) => {
       const rect = railRef.current?.getBoundingClientRect();
       if (!rect) return;
-      const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
-      const tNow = railStart + (x / rect.width) * railSpan;
+      const rStart = railStartRef.current;
+      const rSpan = railSpanRef.current;
+      const rawX = e.clientX - rect.left;
+      const x = Math.max(0, Math.min(rect.width, rawX));
+      const tNow = rStart + (x / rect.width) * rSpan;
 
-      if (drag.type === 'scrub') {
-        onSeek(tNow);
+      // Edge auto-pan: dragging past the rail edge scrolls the window.
+      if (drag.type !== 'pan' && (rawX < 0 || rawX > rect.width)) {
+        const dir = rawX < 0 ? -1 : 1;
+        setFocalSec(clampCenterRef.current(centerRef.current + dir * rSpan * 0.03, rSpan));
+      }
+
+      if (drag.type === 'pan') {
+        const dxPx = e.clientX - drag.startClientX;
+        const dSec = -(dxPx / Math.max(rect.width, 1)) * drag.startSpan;
+        setFocalSec(clampCenterRef.current(drag.startCenter + dSec, drag.startSpan));
         return;
       }
+      if (drag.type === 'scrub') { cbRef.current.onSeek(tNow); return; }
+
+      const cm = committedRef.current;
       if (drag.type === 'trim-start') {
-        const maxStart = Math.max(0, clipEnd - MIN_CLIP_LEN);
-        const next = Math.max(0, Math.min(maxStart, tNow));
-        onTrim(next, clipEnd);
+        const maxStart = Math.max(0, cm.e - MIN_CLIP_LEN);
+        setPending({ s: Math.max(0, Math.min(maxStart, tNow)), e: cm.e });
         return;
       }
       if (drag.type === 'trim-end') {
-        const minEnd = clipStart + MIN_CLIP_LEN;
-        const max = videoDurationSec ?? clipEnd + 600;
-        const next = Math.max(minEnd, Math.min(max, tNow));
-        onTrim(clipStart, next);
+        const minEnd = cm.s + MIN_CLIP_LEN;
+        const max = videoDurRef.current ?? cm.e + 3600;
+        setPending({ s: cm.s, e: Math.max(minEnd, Math.min(max, tNow)) });
         return;
       }
       // B-roll variants all carry an `id`
       if (drag.type !== 'broll-move' && drag.type !== 'broll-resize-l' && drag.type !== 'broll-resize-r') return;
-      const b = brolls.find((x) => x.id === drag.id);
+      const list = brollsRef.current;
+      const b = list.find((x) => x.id === drag.id);
       if (!b) return;
       const len = b.endSec - b.startSec;
       let nextStart = b.startSec;
       let nextEnd = b.endSec;
       if (drag.type === 'broll-move') {
-        nextStart = Math.max(clipStart, Math.min(clipEnd - len, tNow - drag.grabOffset));
+        nextStart = Math.max(cm.s, Math.min(cm.e - len, tNow - drag.grabOffset));
         nextEnd = nextStart + len;
       } else if (drag.type === 'broll-resize-l') {
-        nextStart = Math.max(clipStart, Math.min(b.endSec - MIN_BROLL_LEN, tNow));
+        nextStart = Math.max(cm.s, Math.min(b.endSec - MIN_BROLL_LEN, tNow));
       } else if (drag.type === 'broll-resize-r') {
-        nextEnd = Math.max(b.startSec + MIN_BROLL_LEN, Math.min(clipEnd, tNow));
+        nextEnd = Math.max(b.startSec + MIN_BROLL_LEN, Math.min(cm.e, tNow));
       }
-      onBrollChange(
-        brolls.map((x) => (x.id === b.id ? { ...x, startSec: nextStart, endSec: nextEnd } : x)),
+      cbRef.current.onBrollChange(
+        list.map((x) => (x.id === b.id ? { ...x, startSec: nextStart, endSec: nextEnd } : x)),
       );
     };
-    const onUp = () => setDrag(null);
+    const onUp = () => {
+      // Commit a buffered trim exactly once, on release.
+      const p = pendingTrimRef.current;
+      if (p && (drag.type === 'trim-start' || drag.type === 'trim-end')) {
+        cbRef.current.onTrim(p.s, p.e);
+        setPending(null);
+      }
+      setDrag(null);
+    };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     document.body.style.userSelect = 'none';
     document.body.style.cursor =
-      drag.type === 'scrub' ? 'grabbing'
+      drag.type === 'scrub' || drag.type === 'pan' ? 'grabbing'
       : drag.type.startsWith('broll-resize') || drag.type.startsWith('trim') ? 'ew-resize'
       : 'grabbing';
     return () => {
@@ -223,10 +331,23 @@ export function ClipTimeline({
       document.body.style.userSelect = '';
       document.body.style.cursor = '';
     };
-  }, [drag, brolls, railStart, railSpan, clipStart, clipEnd, videoDurationSec, onTrim, onBrollChange, onSeek]);
+    // Bound once per drag — reads live geometry/callbacks from refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drag]);
 
   const playheadPct = secToPct(playheadSec);
   const playheadInRail = playheadPct >= -0.5 && playheadPct <= 100.5;
+
+  // Auto-follow: while playing (or seeking) with the playhead outside the
+  // zoomed view, pan the window so the playhead re-enters at 25% from the
+  // edge — like every desktop editor. Never fights an active drag.
+  useEffect(() => {
+    if (drag) return;
+    const pct = ((playheadSec - railStart) / railSpan) * 100;
+    if (pct > 100.5) setFocalSec(clampCenter(playheadSec + railSpan * 0.25, railSpan));
+    else if (pct < -0.5) setFocalSec(clampCenter(playheadSec - railSpan * 0.25, railSpan));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playheadSec]);
 
   // Click on rail to seek (when not dragging).
   const onSourceClick = (e: React.MouseEvent) => {
@@ -244,6 +365,14 @@ export function ClipTimeline({
   // Strip geometry (the clip range as a percentage of the rail).
   const stripLeft = secToPct(clipStart);
   const stripWidth = secToPct(clipEnd) - stripLeft;
+  // Clamped variant for chips/lanes so nothing ever renders outside the rail.
+  const stripClamped = clampRange(stripLeft, stripLeft + stripWidth);
+  // Trim-handle positions, clamped into view. When a handle's true position is
+  // off-screen it pins to the edge at reduced opacity (drag still works).
+  const startHandlePct = Math.max(0, Math.min(100, stripLeft));
+  const endHandlePct = Math.max(0, Math.min(100, stripLeft + stripWidth));
+  const startHandleOff = stripLeft < 0 || stripLeft > 100;
+  const endHandleOff = stripLeft + stripWidth < 0 || stripLeft + stripWidth > 100;
 
   return (
     <div ref={containerRef} className="rounded-2xl glass p-3 hairline-top">
@@ -292,11 +421,38 @@ export function ClipTimeline({
       </div>
 
       <div ref={railRef} className="relative select-none">
+        {/* ─── Time ruler (click/drag to seek) ─────────────────────── */}
+        <div
+          className="relative h-5 mb-1 cursor-pointer"
+          onPointerDown={(e) => {
+            e.preventDefault();
+            const rect = railRef.current?.getBoundingClientRect();
+            if (!rect) return;
+            onSeek(pxToSec(e.clientX - rect.left));
+            setDrag({ type: 'scrub' });
+          }}
+        >
+          <div className="absolute inset-x-0 bottom-0 h-px bg-white/10" />
+          {ticks.map((t) => {
+            const pct = secToPct(t);
+            if (pct < 0 || pct > 100) return null;
+            return (
+              <div key={t} className="absolute bottom-0 -translate-x-1/2 flex flex-col items-center pointer-events-none" style={{ left: `${pct}%` }}>
+                <span className="text-[8px] text-text-dim font-mono leading-none mb-0.5">{fmtTick(t)}</span>
+                <div className="w-px h-1.5 bg-white/25" />
+              </div>
+            );
+          })}
+        </div>
+
         {/* ─── B-roll lane ─────────────────────────────────────────── */}
         <div className="relative h-9 mb-1.5 rounded-lg bg-white/4 border border-white/8 overflow-hidden">
           {brolls.map((b) => {
-            const left = secToPct(b.startSec);
-            const width = secToPct(b.endSec) - left;
+            const rawLeft = secToPct(b.startSec);
+            const rawRight = secToPct(b.endSec);
+            const c = clampRange(rawLeft, rawRight);
+            if (!c) return null; // fully outside the visible window
+            const { left, width } = c;
             const selected = b.id === selectedBrollId;
             return (
               <div
@@ -347,65 +503,88 @@ export function ClipTimeline({
         <DisplayLane
           icon={Type}
           label={titleLabel || 'Title'}
-          leftPct={stripLeft}
-          widthPct={stripWidth}
+          leftPct={stripClamped?.left ?? 0}
+          widthPct={stripClamped?.width ?? 0}
           tone="bg-white/8 border-white/15 text-text"
-          empty={!titleLabel}
+          empty={!titleLabel || !stripClamped}
         />
         <DisplayLane
           icon={MusicIcon}
           label={musicLabel ?? 'No music selected'}
-          leftPct={stripLeft}
-          widthPct={stripWidth}
+          leftPct={stripClamped?.left ?? 0}
+          widthPct={stripClamped?.width ?? 0}
           tone="bg-white/6 border-white/12 text-text-muted"
-          empty={!musicLabel}
+          empty={!musicLabel || !stripClamped}
         />
         <DisplayLane
           icon={ImageIcon}
           label={logoLabel ?? 'No logo configured'}
-          leftPct={stripLeft}
-          widthPct={stripWidth}
+          leftPct={stripClamped?.left ?? 0}
+          widthPct={stripClamped?.width ?? 0}
           tone="bg-white/6 border-white/12 text-text-muted"
-          empty={!logoLabel}
+          empty={!logoLabel || !stripClamped}
         />
 
-        {/* ─── Source strip (rail-wide background + clip strip + handles) ─── */}
-        <div className="relative h-11 mt-1 rounded-lg bg-white/3 border border-white/6 overflow-visible">
-          {/* Out-of-clip rail (subtle so user sees room to extend) */}
+        {/* ─── Source strip (rail-wide background + clip strip + handles) ───
+            All horizontal positions are clamped into the 0–100% window, so
+            nothing can slide outside the card no matter the zoom/pan. */}
+        <div className="relative h-11 mt-1 rounded-lg bg-white/3 border border-white/6">
+          {/* Out-of-clip rail — also the drag-to-pan surface */}
           <div className="absolute inset-0 rounded-lg overflow-hidden">
-            <div className="absolute inset-0 bg-[repeating-linear-gradient(45deg,transparent_0_3px,rgba(255,255,255,0.04)_3px_6px)]" />
+            <div
+              className="absolute inset-0 cursor-grab active:cursor-grabbing bg-[repeating-linear-gradient(45deg,transparent_0_3px,rgba(255,255,255,0.04)_3px_6px)]"
+              title="Drag to pan the timeline"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                setDrag({ type: 'pan', startClientX: e.clientX, startCenter: center, startSpan: railSpan });
+              }}
+            />
           </div>
 
-          {/* The actual clip strip (positioned inside the rail) */}
-          <div
-            className="absolute top-0 bottom-0 bg-white/12 border-2 border-white/40 cursor-text overflow-hidden rounded-md"
-            style={{ left: `${stripLeft}%`, width: `${Math.max(0.5, stripWidth)}%` }}
-            onClick={onSourceClick}
-          >
-            {/* Cut overlays (user-disabled words) — positioned within strip */}
-            {(cutRanges ?? []).map((r, i) => {
-              const rLeft = ((r.start - clipStart) / clipDur) * 100;
-              const rWidth = ((r.end - r.start) / clipDur) * 100;
-              if (rWidth <= 0) return null;
-              return (
-                <div
-                  key={i}
-                  className="absolute top-0 bottom-0 bg-error/25 border-l border-r border-error/40 pointer-events-none"
-                  style={{ left: `${rLeft}%`, width: `${rWidth}%` }}
-                />
-              );
-            })}
-            <div className="absolute inset-0 flex items-center px-2 pointer-events-none">
-              <span className="text-[10px] text-text-muted font-medium uppercase tracking-wider">Source</span>
+          {/* The actual clip strip (clamped into view) */}
+          {stripClamped && (
+            <div
+              className={cn(
+                'absolute top-0 bottom-0 bg-white/12 border-y-2 border-white/40 cursor-text overflow-hidden',
+                !startHandleOff && 'border-l-2 rounded-l-md',
+                !endHandleOff && 'border-r-2 rounded-r-md',
+              )}
+              style={{ left: `${stripClamped.left}%`, width: `${Math.max(0.5, stripClamped.width)}%` }}
+              onClick={onSourceClick}
+            >
+              <div className="absolute inset-0 flex items-center px-2 pointer-events-none">
+                <span className="text-[10px] text-text-muted font-medium uppercase tracking-wider">Source</span>
+              </div>
             </div>
-          </div>
+          )}
 
-          {/* Trim handles — sit ON the strip's edges */}
+          {/* Cut overlays (user-disabled words) — rail coordinates, clamped */}
+          {(cutRanges ?? []).map((r, i) => {
+            const c = clampRange(secToPct(r.start), secToPct(r.end));
+            if (!c) return null;
+            return (
+              <div
+                key={i}
+                className="absolute top-0 bottom-0 bg-error/25 border-l border-r border-error/40 pointer-events-none"
+                style={{ left: `${c.left}%`, width: `${c.width}%` }}
+              />
+            );
+          })}
+
+          {/* Trim handles — pinned to the rail edge (dimmed) when their true
+              position is outside the visible window */}
           <div
             onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); setDrag({ type: 'trim-start' }); }}
             title="Drag to extend or shrink the start"
-            className="absolute top-0 bottom-0 w-3 cursor-ew-resize bg-white hover:bg-accent-hover rounded-l-md z-20 shadow-soft flex items-center justify-center"
-            style={{ left: `${stripLeft}%`, transform: 'translateX(-50%)' }}
+            className={cn(
+              'absolute top-0 bottom-0 w-3 cursor-ew-resize bg-white hover:bg-accent-hover rounded-l-md z-20 shadow-soft flex items-center justify-center',
+              startHandleOff && 'opacity-40',
+            )}
+            style={
+              startHandleOff
+                ? (startHandlePct >= 100 ? { right: 0 } : { left: 0 })
+                : { left: `${startHandlePct}%`, transform: 'translateX(-50%)' }
+            }
           >
             <div className="w-px h-4 bg-black/30" />
             <div className="absolute -bottom-5 left-1/2 -translate-x-1/2 text-[9px] font-mono text-text-muted whitespace-nowrap bg-black/60 px-1 py-px rounded">
@@ -415,8 +594,15 @@ export function ClipTimeline({
           <div
             onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); setDrag({ type: 'trim-end' }); }}
             title="Drag to extend or shrink the end"
-            className="absolute top-0 bottom-0 w-3 cursor-ew-resize bg-white hover:bg-accent-hover rounded-r-md z-20 shadow-soft flex items-center justify-center"
-            style={{ left: `${stripLeft + stripWidth}%`, transform: 'translateX(-50%)' }}
+            className={cn(
+              'absolute top-0 bottom-0 w-3 cursor-ew-resize bg-white hover:bg-accent-hover rounded-r-md z-20 shadow-soft flex items-center justify-center',
+              endHandleOff && 'opacity-40',
+            )}
+            style={
+              endHandleOff
+                ? (endHandlePct >= 100 ? { right: 0 } : { left: 0 })
+                : { left: `${endHandlePct}%`, transform: 'translateX(-50%)' }
+            }
           >
             <div className="w-px h-4 bg-black/30" />
             <div className="absolute -bottom-5 left-1/2 -translate-x-1/2 text-[9px] font-mono text-text-muted whitespace-nowrap bg-black/60 px-1 py-px rounded">
@@ -440,11 +626,14 @@ export function ClipTimeline({
         )}
       </div>
 
-      {/* Times */}
+      {/* Footer: clip times + zoom readout + interaction hints */}
       <div className="flex items-center justify-between mt-2 text-[10px] text-text-dim font-mono">
-        <span>{clipStart.toFixed(2)}s</span>
-        <span className="text-text-muted">{playheadSec.toFixed(2)}s</span>
-        <span>{clipEnd.toFixed(2)}s</span>
+        <span>{clipStart.toFixed(2)}s – {clipEnd.toFixed(2)}s</span>
+        <span className="text-text-muted">▶ {playheadSec.toFixed(2)}s</span>
+        <span className="hidden sm:inline font-sans text-[9px] text-text-dim">
+          scroll = zoom · shift+scroll / drag background = pan
+        </span>
+        <span>{effectiveZoom.toFixed(1)}×</span>
       </div>
     </div>
   );

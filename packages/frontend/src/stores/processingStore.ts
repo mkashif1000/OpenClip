@@ -3,6 +3,7 @@ import type { RenderProgress } from '@/services/renderService';
 import type { StyleConfig, PIPConfig, Template } from '@/types';
 import type { LayoutType } from '@/services/canvasRenderer';
 import { renderClip, cancelRender, downloadBlob, getClipFilename } from '@/services/renderService';
+import { getPodcastStyleConfig } from '@/data/premadeTemplates';
 import { useClipStore } from './clipStore';
 import { useSettingsStore } from './settingsStore';
 
@@ -98,7 +99,22 @@ export const useProcessingStore = create<ProcessingState>((set, get) => ({
       // RePIP "Customize" overrides still take precedence on top.
       const assignedId = assignments[clip.clip_id] ?? null;
       const template = assignedId ? templateMap.get(assignedId) : undefined;
-      const base = template?.styles ?? baseStyles;
+      // A podcast template (selected per-clip on the Process page) resolves to
+      // its own StyleConfig; saved DB templates use their stored styles.
+      const podcastStyles = assignedId && !template ? getPodcastStyleConfig(assignedId) : undefined;
+      const base = podcastStyles ?? template?.styles ?? baseStyles;
+
+      // Box geometry lives in `export`; for a per-clip podcast template pull its
+      // geometry so each clip's boxed layout is correct, while keeping global
+      // encode settings (format/B-roll/face-tracking/silence) from the project.
+      const boxGeom = podcastStyles
+        ? {
+            box_width: podcastStyles.export.box_width,
+            box_height: podcastStyles.export.box_height,
+            box_y: podcastStyles.export.box_y,
+            box_radius: podcastStyles.export.box_radius,
+          }
+        : {};
 
       const styleConfig: StyleConfig = {
         subtitle: { ...base.subtitle, ...(override?.subtitle || {}) },
@@ -110,9 +126,8 @@ export const useProcessingStore = create<ProcessingState>((set, get) => ({
         },
         // Export/encode settings (format, B-roll, face-tracking, silence removal)
         // are global choices from the Style/Process panel — a saved template must
-        // not shadow them. Otherwise enabling e.g. B-roll would be silently
-        // ignored for any clip that has a template assigned.
-        export: baseStyles.export,
+        // not shadow them. Box geometry is the exception (layout, not encode).
+        export: { ...baseStyles.export, ...boxGeom },
       };
 
       const exportS = styleConfig.export;
@@ -174,13 +189,17 @@ export const useProcessingStore = create<ProcessingState>((set, get) => ({
         pipConfig = clip.edits.pipConfig;
         layoutType = 'pip';
       } else if (
+        clip.edits?.layout === 'pip' ||
         clip.edits?.layout === 'gameplay' ||
         clip.edits?.layout === 'split-2v' ||
+        clip.edits?.layout === 'split-2h' ||
         clip.edits?.layout === 'split-3' ||
         clip.edits?.layout === 'split-4' ||
         clip.edits?.layout === 'boxed'
       ) {
         // Multi-source split layouts + boxed — canvasRenderer handles them.
+        // ('pip' here is the region-crops variant from the Edit tab's box
+        // editor; legacy pipConfig PIP was handled in the branch above.)
         layoutType = clip.edits.layout;
       } else if (template?.layout === 'pip' && template.pip_config) {
         // Use the assigned template's PIP layout.
@@ -368,6 +387,7 @@ export const useProcessingStore = create<ProcessingState>((set, get) => ({
             faceTrack,
             brollPlan,
             regionCrops: clip.edits?.regionCrops ?? null,
+            layoutRange: clip.edits?.layoutRange ?? null,
           },
           (progress: RenderProgress) => {
             set((s) => ({

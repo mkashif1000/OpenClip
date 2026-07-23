@@ -384,17 +384,24 @@ export function EditTab() {
                     logoOpacity={project.logo_config?.opacity}
                     overridePip={clip.edits?.layout === 'pip' && clip.edits.pipConfig ? clip.edits.pipConfig : undefined}
                     splitLayout={
+                      (clip.edits?.layout === 'pip' && !clip.edits.pipConfig) ||
                       clip.edits?.layout === 'gameplay' ||
                       clip.edits?.layout === 'split-2v' ||
+                      clip.edits?.layout === 'split-2h' ||
                       clip.edits?.layout === 'split-3' ||
                       clip.edits?.layout === 'split-4'
                         ? clip.edits.layout
                         : undefined
                     }
+                    regionCrops={clip.edits?.regionCrops}
+                    splitRange={clip.edits?.layoutRange ?? null}
                     titleFontName={clip.edits?.titleFont}
                     titleWordColors={clip.edits?.titleColors}
                     boxed={clip.edits?.layout === 'boxed'}
                     boxRadiusPx={exportStyles.box_radius}
+                    boxWidthPct={exportStyles.box_width}
+                    boxHeightPct={exportStyles.box_height}
+                    boxYPct={exportStyles.box_y}
                     brolls={(clip.edits?.brolls ?? [])
                       .map((b) => {
                         const src = brollUrls[b.id];
@@ -531,8 +538,16 @@ export function EditTab() {
           sourceAspect={sourceAspect}
           outputAspect={outputAspect}
           initialCrops={clip.edits?.regionCrops as Rect01[] | undefined}
-          onApply={(crops) => {
-            updateEdits({ regionCrops: crops });
+          clipDuration={clip.duration}
+          initialRange={clip.edits?.layoutRange ?? null}
+          onApply={(crops, range) => {
+            // For PIP, the box editor replaces the legacy pipConfig flow —
+            // clear it so it can't shadow the new region crops at render.
+            updateEdits({
+              regionCrops: crops,
+              layoutRange: range,
+              ...(editingLayout === 'pip' ? { pipConfig: undefined } : {}),
+            });
             setEditingLayout(null);
           }}
           onClose={() => setEditingLayout(null)}
@@ -683,8 +698,9 @@ function ToolsPanel({
             label="PIP"
             onClick={() => onPickLayout('pip')}
             preview={
-              <div className="relative w-full h-full rounded bg-white/15">
-                <div className="absolute top-1 right-1 w-1/3 h-1/4 rounded bg-white/45" />
+              <div className="w-full h-full rounded overflow-hidden flex flex-col gap-0.5">
+                <div className="h-[60%] bg-white/30" />
+                <div className="flex-1 bg-white/15" />
               </div>
             }
           />
@@ -707,6 +723,18 @@ function ToolsPanel({
             onClick={() => onPickLayout('split-2v')}
             preview={
               <div className="w-full h-full rounded overflow-hidden flex flex-row gap-0.5">
+                <div className="flex-1 bg-white/30" />
+                <div className="flex-1 bg-white/15" />
+              </div>
+            }
+          />
+          {/* 2 Speakers (stacked — top / bottom) */}
+          <LayoutChip
+            active={layout === 'split-2h'}
+            label="2 Speakers"
+            onClick={() => onPickLayout('split-2h')}
+            preview={
+              <div className="w-full h-full rounded overflow-hidden flex flex-col gap-0.5">
                 <div className="flex-1 bg-white/30" />
                 <div className="flex-1 bg-white/15" />
               </div>
@@ -738,13 +766,12 @@ function ToolsPanel({
                 <div className="bg-white/35" />
               </div>
             }
-            comingSoon
           />
         </div>
         <p className="text-[10px] text-text-dim mt-2 leading-relaxed">
-          All layouts render. Split &amp; Gameplay use auto crops of the source
-          (left/right halves, grid quarters, face-cam on top); tunable
-          per-region crops are a future enhancement.
+          Picking any layout opens the box editor: drag a crop box per region to
+          choose which part of the source shows in it, play the clip to check
+          framing, and optionally limit the layout to a time window.
         </p>
       </Section>
 
@@ -867,7 +894,9 @@ function LayoutChip({
           : 'bg-white/4 border-white/8 hover:bg-white/8 hover:border-white/15',
       )}
     >
-      <div className="aspect-video rounded-lg overflow-hidden mb-1.5 bg-black/30 p-1">
+      {/* 9:16 frame — the output IS a vertical video, so the mini layout
+          diagrams read in the orientation they'll actually render. */}
+      <div className="aspect-[9/16] w-14 mx-auto rounded-lg overflow-hidden mb-1.5 bg-black/30 p-1">
         {preview}
       </div>
       <div className="flex items-center justify-between">

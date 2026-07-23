@@ -24,10 +24,10 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { X, RotateCcw, Check } from 'lucide-react';
+import { X, RotateCcw, Check, Play, Pause } from 'lucide-react';
 import { cn } from '@/lib/cn';
 
-export type EditableLayout = 'pip' | 'gameplay' | 'split-2v' | 'split-3' | 'split-4';
+export type EditableLayout = 'pip' | 'gameplay' | 'split-2v' | 'split-2h' | 'split-3' | 'split-4';
 
 export type Rect01 = { x: number; y: number; w: number; h: number };
 type RegionDef = { label: string; out: Rect01 };
@@ -49,6 +49,11 @@ function getRegionDefs(layout: EditableLayout): RegionDef[] {
       return [
         { label: 'Left', out: { x: 0, y: 0, w: 0.5, h: 1 } },
         { label: 'Right', out: { x: 0.5, y: 0, w: 0.5, h: 1 } },
+      ];
+    case 'split-2h':
+      return [
+        { label: 'Top (Speaker 1)', out: { x: 0, y: 0, w: 1, h: 0.5 } },
+        { label: 'Bottom (Speaker 2)', out: { x: 0, y: 0.5, w: 1, h: 0.5 } },
       ];
     case 'split-3':
       return [
@@ -105,13 +110,17 @@ interface Props {
   outputAspect: number;
   /** Existing crops to start with, in order. Empty → defaults. */
   initialCrops?: Rect01[];
-  onApply: (crops: Rect01[]) => void;
+  /** Clip length in seconds — enables playback looping + the segment timeline. */
+  clipDuration?: number;
+  /** Existing split time-window (clip-relative seconds). Null/absent = whole clip. */
+  initialRange?: { start: number; end: number } | null;
+  onApply: (crops: Rect01[], range: { start: number; end: number } | null) => void;
   onClose: () => void;
 }
 
 export function LayoutEditorModal({
   open, layout, videoUrl, previewSec, sourceAspect, outputAspect,
-  initialCrops, onApply, onClose,
+  initialCrops, clipDuration, initialRange, onApply, onClose,
 }: Props) {
   const regions = getRegionDefs(layout);
   const targetPxAspects = regions.map((r) => regionPxAspect(r.out, outputAspect));
@@ -134,8 +143,13 @@ export function LayoutEditorModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, layout]);
 
-  // Seek the preview to previewSec, paused.
+  // Video preview: starts paused at previewSec; Play loops the CLIP segment
+  // (previewSec → previewSec + clipDuration) so framing can be judged in motion.
   const videoRef = useRef<HTMLVideoElement>(null);
+  const dur = Math.max(0.5, clipDuration ?? 0);
+  const hasDur = (clipDuration ?? 0) > 0.5;
+  const [playing, setPlaying] = useState(false);
+  const [curT, setCurT] = useState(0); // clip-relative seconds (for the playhead)
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -143,7 +157,64 @@ export function LayoutEditorModal({
     if (v.readyState >= 1) onMeta();
     else v.addEventListener('loadedmetadata', onMeta, { once: true });
     return () => v.removeEventListener('loadedmetadata', onMeta);
-  }, [previewSec, videoUrl]);
+  }, [previewSec, videoUrl, open]);
+  useEffect(() => { if (!open) setPlaying(false); }, [open]);
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (playing) v.play().catch(() => setPlaying(false));
+    else v.pause();
+  }, [playing]);
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const onTime = () => {
+      const rel = v.currentTime - previewSec;
+      setCurT(Math.max(0, Math.min(dur, rel)));
+      // Loop within the clip's own window.
+      if (hasDur && rel > dur) v.currentTime = previewSec;
+    };
+    v.addEventListener('timeupdate', onTime);
+    return () => v.removeEventListener('timeupdate', onTime);
+  }, [previewSec, dur, hasDur]);
+
+  // Optional split time-window (clip-relative). Toggled by the user.
+  const [rangeOn, setRangeOn] = useState(!!initialRange);
+  const [range, setRange] = useState<{ start: number; end: number }>(
+    initialRange ?? { start: 0, end: dur },
+  );
+  useEffect(() => {
+    if (!open) return;
+    setRangeOn(!!initialRange);
+    setRange(initialRange ?? { start: 0, end: dur });
+    setCurT(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, layout]);
+
+  // Drag state for the segment handles.
+  const barRef = useRef<HTMLDivElement>(null);
+  const [rangeDrag, setRangeDrag] = useState<null | 'start' | 'end'>(null);
+  useEffect(() => {
+    if (!rangeDrag) return;
+    const onMove = (e: PointerEvent) => {
+      const rect = barRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const t = frac * dur;
+      setRange((r) => rangeDrag === 'start'
+        ? { start: Math.min(t, r.end - 0.5), end: r.end }
+        : { start: r.start, end: Math.max(t, r.start + 0.5) });
+    };
+    const onUp = () => setRangeDrag(null);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    document.body.style.userSelect = 'none';
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      document.body.style.userSelect = '';
+    };
+  }, [rangeDrag, dur]);
 
   // Drag state per box.
   const sourceRef = useRef<HTMLDivElement>(null);
@@ -240,6 +311,7 @@ export function LayoutEditorModal({
               Customize {layout === 'pip' ? 'PIP'
                 : layout === 'gameplay' ? 'Gameplay'
                 : layout === 'split-2v' ? 'Split 2'
+                : layout === 'split-2h' ? 'Two-Speaker Split'
                 : layout === 'split-3' ? 'Split 3'
                 : 'Split 4'} Layout
             </h3>
@@ -337,8 +409,22 @@ export function LayoutEditorModal({
           </div>
         </div>
 
-        {/* Region buttons (quick select) */}
-        <div className="px-5 pb-3 flex flex-wrap gap-1.5">
+        {/* Playback + region quick-select */}
+        <div className="px-5 pb-1 flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => setPlaying((p) => !p)}
+            disabled={!videoUrl}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white text-black hover:bg-accent-hover text-[11px] font-semibold disabled:opacity-50 shadow-soft"
+          >
+            {playing ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
+            {playing ? 'Pause' : 'Play Clip'}
+          </button>
+          {hasDur && (
+            <span className="text-[10px] font-mono text-text-dim">
+              {curT.toFixed(1)}s / {dur.toFixed(1)}s
+            </span>
+          )}
+          <div className="flex-1" />
           {regions.map((r, i) => (
             <button
               key={i}
@@ -352,6 +438,51 @@ export function LayoutEditorModal({
             </button>
           ))}
         </div>
+
+        {/* Optional split time-window */}
+        {hasDur && (
+          <div className="px-5 pb-3 pt-2 space-y-2">
+            <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
+              <input type="checkbox" className="switch" checked={rangeOn} onChange={(e) => setRangeOn(e.target.checked)} />
+              <span className="text-[11px] text-text">Apply split to part of the clip only</span>
+              {rangeOn && (
+                <span className="text-[10px] font-mono text-text-muted">
+                  {range.start.toFixed(1)}s – {range.end.toFixed(1)}s
+                </span>
+              )}
+            </label>
+            {rangeOn && (
+              <div ref={barRef} className="relative h-7 rounded-lg bg-white/6 border border-white/10 select-none">
+                {/* Selected window */}
+                <div
+                  className="absolute top-0 bottom-0 bg-white/20 border-x-2 border-white rounded-sm"
+                  style={{ left: `${(range.start / dur) * 100}%`, width: `${((range.end - range.start) / dur) * 100}%` }}
+                />
+                {/* Playhead */}
+                <div
+                  className="absolute top-0 bottom-0 w-px bg-white pointer-events-none"
+                  style={{ left: `${(curT / dur) * 100}%` }}
+                />
+                {/* Handles */}
+                <div
+                  onPointerDown={(e) => { e.preventDefault(); setRangeDrag('start'); }}
+                  className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full bg-white shadow-soft cursor-ew-resize z-10"
+                  style={{ left: `${(range.start / dur) * 100}%` }}
+                />
+                <div
+                  onPointerDown={(e) => { e.preventDefault(); setRangeDrag('end'); }}
+                  className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full bg-white shadow-soft cursor-ew-resize z-10"
+                  style={{ left: `${(range.end / dur) * 100}%` }}
+                />
+              </div>
+            )}
+            {rangeOn && (
+              <p className="text-[10px] text-text-dim leading-snug">
+                The split layout shows only inside this window — the rest of the clip plays full-frame.
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Footer */}
         <div className="flex items-center justify-between p-4 border-t border-white/8">
@@ -370,7 +501,12 @@ export function LayoutEditorModal({
               Cancel
             </button>
             <button
-              onClick={() => onApply(crops)}
+              onClick={() => onApply(
+                crops,
+                rangeOn && hasDur
+                  ? { start: Math.max(0, range.start), end: Math.min(dur, range.end) }
+                  : null,
+              )}
               className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white text-black hover:bg-accent-hover text-sm font-medium shadow-soft"
             >
               <Check className="w-3.5 h-3.5" strokeWidth={2.5} />

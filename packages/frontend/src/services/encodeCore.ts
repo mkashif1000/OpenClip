@@ -117,6 +117,7 @@ export interface ClipEncodeSpec {
   faceCenters: (FaceCenter | null)[] | null;
   /** Per-region source crops for split / gameplay layouts. */
   regionCrops?: Array<{ x: number; y: number; w: number; h: number }> | null;
+  layoutRange?: { start: number; end: number } | null;
 }
 
 /**
@@ -150,6 +151,7 @@ export function emitFrame(
     height: spec.outputHeight,
     faceCenter: spec.faceCenters?.[i] ?? null,
     regionCrops: spec.regionCrops ?? undefined,
+    layoutRange: spec.layoutRange ?? undefined,
   });
   const bitmap = (canvas as OffscreenCanvas).transferToImageBitmap();
   const frame = new VideoFrame(bitmap, {

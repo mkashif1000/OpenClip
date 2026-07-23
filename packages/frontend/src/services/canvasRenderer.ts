@@ -13,12 +13,13 @@ export type LayoutType =
   | 'hybrid'
   | 'gameplay'
   | 'split-2v'
+  | 'split-2h'
   | 'split-3'
   | 'split-4'
   | 'boxed';
 
 /** Layouts that compose multiple crops of the same source into one output. */
-export const SPLIT_LAYOUTS = new Set<LayoutType>(['gameplay', 'split-2v', 'split-3', 'split-4']);
+export const SPLIT_LAYOUTS = new Set<LayoutType>(['gameplay', 'split-2v', 'split-2h', 'split-3', 'split-4']);
 
 /** Anything the renderer can sample pixels from (element, decoded frame, bitmap). */
 export type VideoSourceLike = HTMLVideoElement | VideoFrame | ImageBitmap;
@@ -61,6 +62,11 @@ export interface FrameRenderJob {
    * absent, defaults from getSplitRegions are used.
    */
   regionCrops?: Array<{ x: number; y: number; w: number; h: number }>;
+  /**
+   * Time window (seconds relative to clip start) during which a split layout
+   * applies; outside it the frame is drawn standard/full-frame. Null = whole clip.
+   */
+  layoutRange?: { start: number; end: number } | null;
 }
 
 // ─── Main render function ─────────────────────────────────────────────────────
@@ -86,10 +92,25 @@ export function renderFrame(job: FrameRenderJob): void {
     drawPIPLayout(ctx, video, pipConfig, width, height, faceCenter);
   } else if (layoutType === 'pip' && pipConfig) {
     drawPIPLayout(ctx, video, pipConfig, width, height, faceCenter);
-  } else if (SPLIT_LAYOUTS.has(layoutType)) {
+  } else if (
+    layoutType === 'pip' &&
+    (!job.layoutRange || (relativeTime >= job.layoutRange.start && relativeTime <= job.layoutRange.end))
+  ) {
+    // PIP picked in the Edit tab's box editor (regionCrops, no legacy
+    // pipConfig): render as a two-region split — big content on top,
+    // smaller speaker box below.
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, width, height);
+    drawSplitLayout(ctx, video, 'pip', width, height, faceCenter, job.regionCrops);
+  } else if (
+    SPLIT_LAYOUTS.has(layoutType) &&
+    (!job.layoutRange || (relativeTime >= job.layoutRange.start && relativeTime <= job.layoutRange.end))
+  ) {
     // Multi-source split layouts: each region is a crop of the source drawn
     // at a sub-region of the output. Per-clip source crops (set in the
-    // Layout Editor modal) override the auto defaults when present.
+    // Layout Editor modal) override the auto defaults when present. When a
+    // layoutRange is set, the split only shows inside that window — outside
+    // it the clip falls through to the standard full-frame draw below.
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, width, height);
     drawSplitLayout(ctx, video, layoutType, width, height, faceCenter, job.regionCrops);
@@ -98,7 +119,11 @@ export function renderFrame(job: FrameRenderJob): void {
     // Used by the "Boxed Video" podcast template (title above, captions below).
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, width, height);
-    drawBoxedLayout(ctx, video, width, height, faceCenter, styleConfig.export?.box_radius);
+    drawBoxedLayout(ctx, video, width, height, faceCenter, styleConfig.export?.box_radius, {
+      widthPct: styleConfig.export?.box_width,
+      heightPct: styleConfig.export?.box_height,
+      yPct: styleConfig.export?.box_y,
+    });
   } else {
     // Standard full-frame video
     ctx.save();
@@ -131,6 +156,7 @@ export function renderFrame(job: FrameRenderJob): void {
       positionY: titleStyle.position_y,
       borderRadius: titleStyle.border_radius ?? 6,
       maxCharsPerLine: titleStyle.max_chars_per_line || (width < 800 ? 25 : 45),
+      maxWidthPct: titleStyle.max_width,
       fontName: titleStyle.font_name,
       highlightColor: titleStyle.highlight_color || '#FFD23F',
       accentColor: titleStyle.accent_color || '#FF4D4D',
@@ -151,6 +177,7 @@ export function renderFrame(job: FrameRenderJob): void {
       fontName: subStyle.font_name || 'Arial',
       bold: subStyle.bold ?? true,
       marginV: subStyle.margin_v || (width < 800 ? 120 : 60),
+      maxWidthPct: subStyle.max_width,
       preset: subStyle.preset,
     }, width, height);
   }
@@ -265,12 +292,28 @@ export function getSplitRegions(
   faceCenter?: { x: number; y: number } | null,
 ): LayoutRegion[] {
   switch (layout) {
+    case 'pip':
+      // Big content view on top + smaller speaker box below. Defaults: content
+      // shows the full frame, speaker crops the center. Keep in sync with
+      // getSplitRegions in MultiSplitComposition (preview == export).
+      return [
+        { out: { x: 0, y: 0, w: 1, h: 0.6 }, src: { x: 0, y: 0, w: 1, h: 1 } },
+        { out: { x: 0, y: 0.6, w: 1, h: 0.4 }, src: clampRect01({ x: 0.3, y: 0.2, w: 0.4, h: 0.6 }) },
+      ];
     case 'split-2v':
       // Left/right halves; each shows the matching half of the source so a
       // 16:9 podcast with two speakers reads naturally as "speaker A | speaker B".
       return [
         { out: { x: 0, y: 0, w: 0.5, h: 1 }, src: { x: 0, y: 0, w: 0.5, h: 1 } },
         { out: { x: 0.5, y: 0, w: 0.5, h: 1 }, src: { x: 0.5, y: 0, w: 0.5, h: 1 } },
+      ];
+    case 'split-2h':
+      // Two-speaker stack: top/bottom rows. Defaults crop each speaker from
+      // the left/right half of a side-by-side 16:9 podcast frame. Keep in sync
+      // with getSplitRegions in MultiSplitComposition (preview == export).
+      return [
+        { out: { x: 0, y: 0, w: 1, h: 0.5 }, src: { x: 0, y: 0.1, w: 0.5, h: 0.8 } },
+        { out: { x: 0, y: 0.5, w: 1, h: 0.5 }, src: { x: 0.5, y: 0.1, w: 0.5, h: 0.8 } },
       ];
     case 'split-3':
       return [
@@ -346,15 +389,17 @@ function drawBoxedLayout(
   height: number,
   faceCenter?: { x: number; y: number } | null,
   boxRadius?: number,
+  geom?: { widthPct?: number; heightPct?: number; yPct?: number },
 ): void {
-  // Box geometry (normalized to output). Keep in sync with BOXED_RECT used by
-  // the Remotion preview so what the user sees matches the export.
-  const boxW = Math.round(width * 0.84);
-  const boxH = Math.round(height * 0.52);
+  // Box geometry (normalized to output, configurable in the template drawer).
+  // Keep in sync with the boxed div in ClipComposition so preview == export.
+  const wPct = geom?.widthPct ?? 84;
+  const hPct = geom?.heightPct ?? 52;
+  const yPct = geom?.yPct ?? 20;
+  const boxW = Math.round(width * (wPct / 100));
+  const boxH = Math.round(height * (hPct / 100));
   const boxX = Math.round((width - boxW) / 2);
-  // Centered with a slight lean toward top so the title gets more room than
-  // the captions below — matches the screenshot the user shared.
-  const boxY = Math.round(height * 0.20);
+  const boxY = Math.round(height * (yPct / 100));
   // `boxRadius` is in OUTPUT px (configurable in the template drawer). Clamp to
   // half the smaller side (a full pill) so it never inverts.
   const radius = Math.max(0, Math.min(boxRadius ?? 40, Math.min(boxW, boxH) / 2));
@@ -414,6 +459,8 @@ interface TitleStyle {
   positionY?: number | null;
   borderRadius: number;
   maxCharsPerLine: number;
+  /** Max title width as a % of frame width. When set, wrap by width. */
+  maxWidthPct?: number;
   /** Font family — falls back to a safe stack if unset. */
   fontName?: string;
   /** Tier-1 / tier-2 word colors (multi-color titles). */
@@ -444,6 +491,33 @@ function wrapColoredWords(words: TitleWord[], maxChars: number): TitleWord[][] {
   return lines;
 }
 
+/** Greedy word-wrap by measured pixel width. `ctx.font` must already be set to
+ *  the title font. Mirrors the Remotion preview's max-width wrapping. */
+function wrapColoredWordsByWidth(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  words: TitleWord[],
+  maxWidth: number,
+  spaceW: number,
+): TitleWord[][] {
+  const lines: TitleWord[][] = [];
+  let cur: TitleWord[] = [];
+  let curW = 0;
+  for (const w of words) {
+    const wordW = ctx.measureText(w.text).width;
+    const add = cur.length ? spaceW + wordW : wordW;
+    if (cur.length && curW + add > maxWidth) {
+      lines.push(cur);
+      cur = [w];
+      curW = wordW;
+    } else {
+      cur.push(w);
+      curW += add;
+    }
+  }
+  if (cur.length) lines.push(cur);
+  return lines;
+}
+
 function drawTitleOverlay(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
   title: string,
@@ -455,16 +529,22 @@ function drawTitleOverlay(
 
   const rawWords = title.trim().split(/\s+/).filter(Boolean);
   const words: TitleWord[] = rawWords.map((t, i) => ({ text: t, tier: style.wordColors?.[i] ?? 0 }));
-  const wordLines = wrapColoredWords(words, style.maxCharsPerLine);
+
+  ctx.font = `bold ${style.fontSize}px ${fontStack(style.fontName)}`;
+  const spaceW = ctx.measureText(' ').width;
+
+  // Width-based wrapping (matches the Remotion preview) when a max width is set;
+  // otherwise fall back to character-count wrapping. The 2.4×padding subtracted
+  // mirrors the box's horizontal padding (padX = padding*1.2 on each side).
+  const wordLines = typeof style.maxWidthPct === 'number'
+    ? wrapColoredWordsByWidth(ctx, words, width * (style.maxWidthPct / 100) - style.padding * 2.4, spaceW)
+    : wrapColoredWords(words, style.maxCharsPerLine);
 
   const lineHeight = style.fontSize * 1.3;
   const totalTextH = wordLines.length * lineHeight;
   const padX = style.padding * 1.2;
   const padY = style.padding * 0.6;
   const boxH = totalTextH + padY * 2;
-
-  ctx.font = `bold ${style.fontSize}px ${fontStack(style.fontName)}`;
-  const spaceW = ctx.measureText(' ').width;
 
   // Measure each line's pixel width (word widths + inter-word spaces).
   const lineWidths = wordLines.map((line) =>
@@ -533,6 +613,8 @@ interface SubtitleStyle {
   fontName: string;
   bold: boolean;
   marginV: number;
+  /** Max caption width as a % of frame width (controls wrapping). */
+  maxWidthPct?: number;
   preset?: string;
 }
 
@@ -593,7 +675,7 @@ function drawSubtitleOverlay(
 
   const upperWords = words.map((w) => w.toUpperCase());
   const spaceW = ctx.measureText(' ').width;
-  const maxLineWidth = width * 0.9; // keep ~5% margin on each side
+  const maxLineWidth = width * ((style.maxWidthPct ?? 90) / 100);
 
   // Greedy word-wrap so captions never run off the frame. Each item keeps its
   // global word index (gi) so the active-word styling maps correctly. The

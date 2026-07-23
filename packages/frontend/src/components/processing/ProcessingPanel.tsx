@@ -14,8 +14,11 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { RePIPModal } from './RePIPModal';
 import { ClipThumbnail } from '@/components/clips/ClipThumbnail';
 import { dbGetTemplates } from '@/services/db';
+import { PODCAST_TEMPLATES, getPodcastTemplate } from '@/data/premadeTemplates';
+import { loadTemplateOverride } from '@/lib/templateOverrides';
+import { autoTitleColors } from '@/lib/titleColors';
 import { cn } from '@/lib/cn';
-import type { Template } from '@/types';
+import type { Template, ClipEdits } from '@/types';
 
 export function ProcessingPanel() {
   const {
@@ -25,7 +28,31 @@ export function ProcessingPanel() {
   } = useProcessingStore();
   const project = useProjectStore((s) => s.currentProject);
   const clips = useClipStore((s) => s.clips);
+  const updateClip = useClipStore((s) => s.updateClip);
   const { assignments, setClipTemplate } = useClipTemplateStore();
+
+  // Assign a template to a single clip from its dropdown. Podcast templates also
+  // stamp the clip's layout + title colors so the render + Edit preview match;
+  // saved templates resolve at render time, and "Default" just clears it.
+  const assignTemplate = (clip: typeof clips[0], id: string) => {
+    setClipTemplate(clip.clip_id, id || null);
+    const pod = id ? getPodcastTemplate(id) : undefined;
+    if (pod) {
+      const edits: ClipEdits = { ...(clip.edits ?? {}), layout: pod.layout };
+      if (pod.hideTitle) {
+        edits.customTitle = '';
+        delete edits.titleColors;
+      } else {
+        edits.titleColors = autoTitleColors(clip.edits?.customTitle ?? clip.title);
+      }
+      // Split templates: carry the user's saved box framing (if customized).
+      if (pod.layout === 'split-2h' || pod.layout === 'split-2v') {
+        const saved = loadTemplateOverride(pod.id)?.regionCrops;
+        if (saved && saved.length) edits.regionCrops = saved;
+      }
+      updateClip(clip.clip_id, { edits }).catch(console.error);
+    }
+  };
   const { styles, setExportSettings } = useStyleStore();
   const { pexelsKey, pixabayKey, openSettings } = useSettingsStore();
   const hasBrollKey = !!(pexelsKey || pixabayKey);
@@ -227,16 +254,25 @@ export function ProcessingPanel() {
                         <div className="flex items-center gap-2 mb-2 flex-wrap">
                           <select
                             value={assignedTemplate ?? ''}
-                            onChange={(e) => setClipTemplate(clip.clip_id, e.target.value || null)}
+                            onChange={(e) => assignTemplate(clip, e.target.value)}
                             disabled={isActive}
                             className="flex-1 max-w-xs px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/10 text-text text-xs focus:outline-none focus:border-white/30 disabled:opacity-50"
                           >
                             <option value="">Default (Project Styles)</option>
-                            {templates.map((t) => (
-                              <option key={t.template_id} value={t.template_id}>
-                                {t.name}{t.layout === 'pip' ? ' (PIP)' : ''}
-                              </option>
-                            ))}
+                            <optgroup label="Podcast">
+                              {PODCAST_TEMPLATES.map((t) => (
+                                <option key={t.id} value={t.id}>{t.name}</option>
+                              ))}
+                            </optgroup>
+                            {templates.length > 0 && (
+                              <optgroup label="Saved">
+                                {templates.map((t) => (
+                                  <option key={t.template_id} value={t.template_id}>
+                                    {t.name}{t.layout === 'pip' ? ' (PIP)' : ''}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
                           </select>
 
                           {(isCompleted || isFailed) && !isProcessing && (

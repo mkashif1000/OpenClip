@@ -50,6 +50,8 @@ export interface RenderJob {
   brollPlan?: Array<{ startSec: number; endSec: number; file: File; clipDurationSec: number }> | null;
   /** Per-region source crops for split / gameplay layouts. */
   regionCrops?: Array<{ x: number; y: number; w: number; h: number }> | null;
+  /** Clip-relative window the split layout applies in (null = whole clip). */
+  layoutRange?: { start: number; end: number } | null;
 }
 
 export interface RenderProgress {
@@ -121,6 +123,7 @@ export async function renderClip(
     frameSrcTimes,
     faceCenters,
     regionCrops: job.regionCrops ?? null,
+    layoutRange: job.layoutRange ?? null,
   };
 
   // Logo: a File for the worker (cloned cheaply) + a decoded bitmap for the
@@ -391,6 +394,7 @@ function renderViaWorker(opts: {
         frameSrcTimes: spec.frameSrcTimes,
         faceCenters: spec.faceCenters,
         regionCrops: spec.regionCrops ?? null,
+        layoutRange: spec.layoutRange ?? null,
         demuxStartSec,
         demuxDurationSec,
       });

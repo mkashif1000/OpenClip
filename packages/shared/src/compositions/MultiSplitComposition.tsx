@@ -13,13 +13,14 @@
  */
 
 import React from 'react';
-import { AbsoluteFill, Audio, OffthreadVideo, Sequence } from 'remotion';
+import { AbsoluteFill, Audio, OffthreadVideo, Sequence, useCurrentFrame, useVideoConfig } from 'remotion';
+import { VideoLayer } from './VideoLayer';
 import { TitleOverlay } from './TitleOverlay';
 import { SubtitleOverlay } from './SubtitleOverlay';
 import { LogoOverlay } from './LogoOverlay';
 import type { ClipCompositionProps, BrollInsert } from './ClipComposition';
 
-export type SplitLayout = 'gameplay' | 'split-2v' | 'split-3' | 'split-4';
+export type SplitLayout = 'pip' | 'gameplay' | 'split-2v' | 'split-2h' | 'split-3' | 'split-4';
 
 type Rect01 = { x: number; y: number; w: number; h: number };
 type LayoutRegion = { out: Rect01; src: Rect01 };
@@ -34,10 +35,24 @@ function clampRect01(r: Rect01): Rect01 {
 
 export function getSplitRegions(layout: SplitLayout): LayoutRegion[] {
   switch (layout) {
+    case 'pip':
+      // Big content view on top + smaller speaker box below. Keep in sync
+      // with getSplitRegions in canvasRenderer (preview == export).
+      return [
+        { out: { x: 0, y: 0, w: 1, h: 0.6 }, src: { x: 0, y: 0, w: 1, h: 1 } },
+        { out: { x: 0, y: 0.6, w: 1, h: 0.4 }, src: clampRect01({ x: 0.3, y: 0.2, w: 0.4, h: 0.6 }) },
+      ];
     case 'split-2v':
       return [
         { out: { x: 0, y: 0, w: 0.5, h: 1 }, src: { x: 0, y: 0, w: 0.5, h: 1 } },
         { out: { x: 0.5, y: 0, w: 0.5, h: 1 }, src: { x: 0.5, y: 0, w: 0.5, h: 1 } },
+      ];
+    case 'split-2h':
+      // Two-speaker stack: top/bottom rows. Defaults crop each speaker from
+      // the left/right half of a side-by-side 16:9 podcast frame.
+      return [
+        { out: { x: 0, y: 0, w: 1, h: 0.5 }, src: { x: 0, y: 0.1, w: 0.5, h: 0.8 } },
+        { out: { x: 0, y: 0.5, w: 1, h: 0.5 }, src: { x: 0.5, y: 0.1, w: 0.5, h: 0.8 } },
       ];
     case 'split-3':
       return [
@@ -107,6 +122,13 @@ function CroppedRegion({ src, region }: { src: string; region: LayoutRegion }) {
 
 export interface MultiSplitCompositionProps extends ClipCompositionProps {
   layout: SplitLayout;
+  /** Per-region source crops (normalized [0,1]), in region order. Overrides
+   *  the layout defaults — set by the Layout Editor / template drawer. */
+  regionCrops?: Rect01[];
+  /** Clip-relative window (seconds) the split applies in; outside it the
+   *  source renders full-frame. Omit for the whole clip. */
+  splitStartSec?: number;
+  splitEndSec?: number;
 }
 
 export const MultiSplitComposition: React.FC<MultiSplitCompositionProps> = (props) => {
@@ -118,18 +140,36 @@ export const MultiSplitComposition: React.FC<MultiSplitCompositionProps> = (prop
     titleHighlightColor, titleAccentColor, titleWordColors,
     subtitlePrimaryColor, subtitleHighlightColor, subtitleOutlineColor,
     subtitleOutlineWidth, subtitleFontSize, subtitleFontName, subtitleBold,
-    subtitleMarginV, subtitlePreset,
+    subtitleMarginV, subtitlePreset, subtitleMaxWidthPct, titleMaxWidthPct,
     brolls,
     layout,
+    regionCrops,
+    splitStartSec,
+    splitEndSec,
   } = props;
 
-  const regions = getSplitRegions(layout);
+  // User-edited crops (Layout Editor / template drawer) override the defaults.
+  const regions = getSplitRegions(layout).map((region, i) =>
+    regionCrops?.[i] ? { ...region, src: regionCrops[i] } : region,
+  );
+
+  // Optional time window: outside [splitStartSec, splitEndSec] the source
+  // plays full-frame (mirrors the export renderer's layoutRange behavior).
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const t = frame / fps;
+  const splitActive =
+    splitStartSec == null || splitEndSec == null || (t >= splitStartSec && t <= splitEndSec);
 
   return (
     <AbsoluteFill style={{ backgroundColor: 'black' }}>
-      {regions.map((region, i) => (
-        <CroppedRegion key={i} src={videoSrc} region={region} />
-      ))}
+      {splitActive ? (
+        regions.map((region, i) => (
+          <CroppedRegion key={i} src={videoSrc} region={region} />
+        ))
+      ) : (
+        <VideoLayer videoSrc={videoSrc} clipStartSec={clipStartSec} />
+      )}
       {musicSrc && <Audio src={musicSrc} volume={musicVolume ?? 0.1} />}
       {brolls?.map((b: BrollInsert, i: number) => (
         <Sequence key={i} from={b.startFrame} durationInFrames={b.durationInFrames} layout="none">
@@ -150,6 +190,7 @@ export const MultiSplitComposition: React.FC<MultiSplitCompositionProps> = (prop
         positionY={titlePositionY}
         borderRadius={titleBorderRadius}
         maxCharsPerLine={titleMaxChars}
+        maxWidthPct={titleMaxWidthPct}
         fontName={titleFontName}
         highlightColor={titleHighlightColor}
         accentColor={titleAccentColor}
@@ -166,6 +207,7 @@ export const MultiSplitComposition: React.FC<MultiSplitCompositionProps> = (prop
         fontName={subtitleFontName}
         bold={subtitleBold}
         marginV={subtitleMarginV}
+        maxWidthPct={subtitleMaxWidthPct}
         preset={subtitlePreset}
       />
     </AbsoluteFill>

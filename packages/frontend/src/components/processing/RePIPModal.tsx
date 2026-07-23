@@ -156,7 +156,7 @@ export function RePIPModal({ clip, onClose, onApply }: RePIPModalProps) {
                         <button
                           onClick={() => setMode('full')}
                           className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                            mode === 'full' ? 'bg-accent text-white' : 'bg-input border border-border text-text-muted hover:text-text'
+                            mode === 'full' ? 'bg-accent text-black' : 'bg-input border border-border text-text-muted hover:text-text'
                           }`}
                         >
                           Full Clip
@@ -164,7 +164,7 @@ export function RePIPModal({ clip, onClose, onApply }: RePIPModalProps) {
                         <button
                           onClick={() => setMode('partial')}
                           className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                            mode === 'partial' ? 'bg-accent text-white' : 'bg-input border border-border text-text-muted hover:text-text'
+                            mode === 'partial' ? 'bg-accent text-black' : 'bg-input border border-border text-text-muted hover:text-text'
                           }`}
                         >
                           Partial
@@ -268,7 +268,7 @@ export function RePIPModal({ clip, onClose, onApply }: RePIPModalProps) {
             </div>
             <button
               onClick={handleApply}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-accent hover:bg-accent-hover text-white font-medium transition-colors"
+              className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-accent hover:bg-accent-hover text-black font-medium transition-colors"
             >
               <Play className="w-4 h-4" />
               Apply & Re-render

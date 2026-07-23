@@ -106,7 +106,7 @@ export function ClipEditor({ clip, onClose }: ClipEditorProps) {
           <button
             onClick={handleSave}
             disabled={saving}
-            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-accent hover:bg-accent-hover text-white text-sm font-medium transition-colors disabled:opacity-50"
+            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-accent hover:bg-accent-hover text-black text-sm font-medium transition-colors disabled:opacity-50"
           >
             <Save className="w-4 h-4" />
             {saving ? 'Saving...' : isNew ? 'Add Clip' : 'Save Changes'}

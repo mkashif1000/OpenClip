@@ -369,7 +369,7 @@ export function Timeline({ zoom, onZoomChange, followPlayhead }: TimelineProps) 
       {/* Drag tooltip */}
       {tooltipText && (
         <div
-          className="pointer-events-none absolute z-50 bg-accent text-white text-[10px] font-mono px-2 py-1 rounded shadow-lg -translate-x-1/2 -translate-y-full whitespace-nowrap"
+          className="pointer-events-none absolute z-50 bg-accent text-black text-[10px] font-mono px-2 py-1 rounded shadow-lg -translate-x-1/2 -translate-y-full whitespace-nowrap"
           style={{ left: tooltipX, top: 30 }}
         >
           {tooltipText}

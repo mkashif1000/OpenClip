@@ -18,6 +18,8 @@ interface SubtitleOverlayProps {
   fontName?: string;
   bold?: boolean;
   marginV?: number;
+  /** Max caption width as a % of frame width (controls wrapping). */
+  maxWidthPct?: number;
   /** Caption look: karaoke (default) | pop | box | minimal — mirrors the export renderer. */
   preset?: string;
 }
@@ -41,6 +43,7 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
   fontName = 'Arial',
   bold = true,
   marginV = 120,
+  maxWidthPct = 90,
   preset = 'karaoke',
 }) => {
   const frame = useCurrentFrame();
@@ -137,7 +140,7 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
         right: 0,
         display: 'flex',
         justifyContent: 'center',
-        padding: '0 24px',
+        padding: '0 12px',
       }}
     >
       <div
@@ -149,7 +152,7 @@ export const SubtitleOverlay: React.FC<SubtitleOverlayProps> = ({
           textTransform: 'uppercase',
           lineHeight: 1.3,
           textShadow: preset === 'minimal' ? 'none' : textShadow,
-          maxWidth: '100%',
+          maxWidth: `${maxWidthPct}%`,
           wordWrap: 'break-word',
           overflowWrap: 'break-word',
           ...(preset === 'minimal'

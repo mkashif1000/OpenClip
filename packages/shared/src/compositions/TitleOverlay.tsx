@@ -11,6 +11,9 @@ interface TitleOverlayProps {
   positionY?: number; // 0-100, % of composition height (Y center of title)
   borderRadius?: number;
   maxCharsPerLine?: number;
+  /** Max title width as a % of frame width. When set, text wraps by width
+   *  (instead of character count) so the title fills the chosen width. */
+  maxWidthPct?: number;
   fontName?: string;
   /** Tier-1 / tier-2 word colors (multi-color titles). */
   highlightColor?: string;
@@ -32,6 +35,7 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({
   positionY,
   borderRadius = 6,
   maxCharsPerLine = 25,
+  maxWidthPct,
   fontName,
   highlightColor = '#FFD23F',
   accentColor = '#FF4D4D',
@@ -41,7 +45,9 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({
 
   const rawWords = title.trim().split(/\s+/).filter(Boolean);
   const words: Word[] = rawWords.map((t, i) => ({ text: t, tier: wordColors?.[i] ?? 0 }));
-  const lines = wrapWords(words, maxCharsPerLine);
+  // Width mode wraps naturally inside a max-width box; char mode pre-wraps.
+  const widthMode = typeof maxWidthPct === 'number';
+  const lines = widthMode ? [] : wrapWords(words, maxCharsPerLine);
 
   let yStyle: React.CSSProperties;
   if (typeof positionY === 'number') {
@@ -78,9 +84,26 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({
           padding: `${padding * 0.6}px ${padding * 1.2}px`,
           borderRadius,
           textAlign: 'center',
+          ...(widthMode ? { maxWidth: `${maxWidthPct}%` } : {}),
         }}
       >
-        {lines.map((line, i) => (
+        {widthMode ? (
+          <div
+            style={{
+              fontFamily: fontName ? `${fontName}, Arial, Helvetica, sans-serif` : 'Arial, Helvetica, sans-serif',
+              fontSize,
+              fontWeight: 'bold',
+              lineHeight: 1.3,
+              textShadow: transparent ? '0 2px 6px rgba(0,0,0,0.85)' : 'none',
+            }}
+          >
+            {words.map((w, j) => (
+              <span key={j} style={{ color: tierColor(w.tier) }}>
+                {w.text}{j < words.length - 1 ? ' ' : ''}
+              </span>
+            ))}
+          </div>
+        ) : lines.map((line, i) => (
           <div
             key={i}
             style={{

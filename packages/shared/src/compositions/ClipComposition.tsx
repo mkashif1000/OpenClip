@@ -34,6 +34,8 @@ export interface ClipCompositionProps {
   titlePositionY?: number;
   titleBorderRadius?: number;
   titleMaxChars?: number;
+  /** Max title width as % of frame width (width-based wrapping). */
+  titleMaxWidthPct?: number;
   titleFontName?: string;
   titleHighlightColor?: string;
   titleAccentColor?: string;
@@ -43,6 +45,13 @@ export interface ClipCompositionProps {
   boxed?: boolean;
   /** Corner radius (composition px) of the boxed inset. */
   boxRadiusPx?: number;
+  /** Boxed inset geometry as % of frame (centered horizontally). */
+  boxWidthPct?: number;
+  boxHeightPct?: number;
+  boxYPct?: number;
+
+  /** Max caption width as % of frame width. */
+  subtitleMaxWidthPct?: number;
 
   // B-roll inserts overlaid on the source for their span
   brolls?: BrollInsert[];
@@ -91,12 +100,17 @@ export const ClipComposition: React.FC<ClipCompositionProps> = ({
   titlePositionY,
   titleBorderRadius,
   titleMaxChars,
+  titleMaxWidthPct,
   titleFontName,
   titleHighlightColor,
   titleAccentColor,
   titleWordColors,
   boxed,
   boxRadiusPx,
+  boxWidthPct,
+  boxHeightPct,
+  boxYPct,
+  subtitleMaxWidthPct,
   brolls,
   subtitlePrimaryColor,
   subtitleHighlightColor,
@@ -117,10 +131,10 @@ export const ClipComposition: React.FC<ClipCompositionProps> = ({
         <div
           style={{
             position: 'absolute',
-            left: '8%',
-            top: '20%',
-            width: '84%',
-            height: '52%',
+            left: `${(100 - (boxWidthPct ?? 84)) / 2}%`,
+            top: `${boxYPct ?? 20}%`,
+            width: `${boxWidthPct ?? 84}%`,
+            height: `${boxHeightPct ?? 52}%`,
             borderRadius: boxRadiusPx ?? 40,
             overflow: 'hidden',
             backgroundColor: '#000',
@@ -154,6 +168,7 @@ export const ClipComposition: React.FC<ClipCompositionProps> = ({
         positionY={titlePositionY}
         borderRadius={titleBorderRadius}
         maxCharsPerLine={titleMaxChars}
+        maxWidthPct={titleMaxWidthPct}
         fontName={titleFontName}
         highlightColor={titleHighlightColor}
         accentColor={titleAccentColor}
@@ -170,6 +185,7 @@ export const ClipComposition: React.FC<ClipCompositionProps> = ({
         fontName={subtitleFontName}
         bold={subtitleBold}
         marginV={subtitleMarginV}
+        maxWidthPct={subtitleMaxWidthPct}
         preset={subtitlePreset}
       />
     </AbsoluteFill>
