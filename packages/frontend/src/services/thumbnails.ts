@@ -14,10 +14,29 @@
  *    in flight.
  */
 
+import { getPerformanceProfile } from './performanceProfile';
+
 const cache = new Map<string, string>();             // key -> object URL
 const pending = new Map<string, Promise<string>>();  // key -> in-flight promise
 const videoEls = new Map<string, Promise<HTMLVideoElement>>(); // fileId -> <video>
+const previewSources = new Map<string, string>(); // original source id -> proxy id
 let chain: Promise<unknown> = Promise.resolve();
+const MAX_CACHE_ENTRIES = 80;
+
+function cacheThumbnail(key: string, url: string): void {
+  cache.set(key, url);
+  while (cache.size > MAX_CACHE_ENTRIES) {
+    const oldest = cache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    const oldUrl = cache.get(oldest);
+    cache.delete(oldest);
+    if (oldUrl) URL.revokeObjectURL(oldUrl);
+  }
+}
+
+export function registerPreviewSource(sourceId: string, previewId: string): void {
+  previewSources.set(sourceId, previewId);
+}
 
 /** Run tasks strictly one-at-a-time, regardless of prior success/failure. */
 function enqueue<T>(fn: () => Promise<T>): Promise<T> {
@@ -80,16 +99,17 @@ function seekTo(video: HTMLVideoElement, t: number): Promise<void> {
 export async function getClipThumbnail(
   fileId: string,
   timeSec: number,
-  maxWidth = 320,
+  maxWidth = getPerformanceProfile().thumbnailWidth,
 ): Promise<string> {
-  const key = `${fileId}:${Math.round(timeSec)}:${maxWidth}`;
+  const sourceId = previewSources.get(fileId) ?? fileId;
+  const key = `${sourceId}:${Math.round(timeSec)}:${maxWidth}`;
   const cached = cache.get(key);
   if (cached) return cached;
   const inflight = pending.get(key);
   if (inflight) return inflight;
 
   const task = enqueue(async () => {
-    const video = await getVideoEl(fileId);
+    const video = await getVideoEl(sourceId);
     await seekTo(video, timeSec);
 
     const vw = video.videoWidth || 1280;
@@ -108,7 +128,7 @@ export async function getClipThumbnail(
     const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/jpeg', 0.7));
     if (!blob) throw new Error('thumbnail encode failed');
     const url = URL.createObjectURL(blob);
-    cache.set(key, url);
+    cacheThumbnail(key, url);
     return url;
   });
 

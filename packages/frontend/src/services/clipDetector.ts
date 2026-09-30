@@ -65,6 +65,7 @@ export async function detectClipsFromSrt(
     end_time: c.end,
     duration: c.duration,
     score: c.score,
+    scoreReasons: c.reasons,
     preview_text: c.preview,
     entries: c.entries as SubtitleEntry[],
     status: 'pending' as const,

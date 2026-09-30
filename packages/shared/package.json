@@ -8,7 +8,8 @@
     ".": "./src/index.ts",
     "./types": "./src/types/index.ts",
     "./compositions": "./src/compositions/index.ts",
-    "./utils": "./src/utils/index.ts"
+    "./utils": "./src/utils/index.ts",
+    "./rendering/*": "./src/rendering/*.ts"
   },
   "dependencies": {
     "react": "^19.0.0",

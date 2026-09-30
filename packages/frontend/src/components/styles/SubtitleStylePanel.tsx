@@ -4,6 +4,7 @@ import { CAPTION_PRESETS, type CaptionPreset } from '@/types';
 import { cn } from '@/lib/cn';
 import { FONT_OPTIONS } from '@/data/fonts';
 import type { SubtitleStyle } from '@/types';
+import { AdvancedSubtitleGallery } from './AdvancedSubtitleGallery';
 
 interface SubtitleStylePanelProps {
   value?: SubtitleStyle;
@@ -25,6 +26,8 @@ export function SubtitleStylePanel({ value, onChange, exportFormat }: SubtitleSt
   return (
     <div className="space-y-4">
       <h3 className="text-sm font-semibold text-text">Subtitle Style</h3>
+
+      <AdvancedSubtitleGallery value={sub} onApply={(style) => setSubtitleStyle(style)} />
 
       {/* Caption look presets — applied identically in preview and export */}
       <div>

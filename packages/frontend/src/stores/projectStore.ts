@@ -5,7 +5,9 @@ import {
   dbUpdateProject, dbRegisterFile, dbGetProjectFiles,
 } from '@/services/db';
 import { opfsWriteFile, opfsDeleteFiles } from '@/services/opfs';
-import { probeVideoFile } from '@/services/ffmpegService';
+import { createPreviewProxy, probeVideoFile } from '@/services/ffmpegService';
+import { getPerformanceProfile } from '@/services/performanceProfile';
+import { registerPreviewSource } from '@/services/thumbnails';
 
 let projectIdGlobal: string | null = null;
 
@@ -19,6 +21,7 @@ export function getCurrentProjectId(): string | null {
 // lazily anyway.
 const MAX_HEAL_BYTES = 500 * 1024 * 1024;
 const healing = new Set<string>();
+const proxyJobs = new Set<string>();
 
 async function healVideoMetadata(projectId: string, videoFile: FileUpload): Promise<void> {
   if (healing.has(projectId)) return;
@@ -48,6 +51,51 @@ async function healVideoMetadata(projectId: string, videoFile: FileUpload): Prom
   }
 }
 
+async function preparePreviewProxy(projectId: string, videoFile: FileUpload): Promise<void> {
+  const profile = getPerformanceProfile();
+  // Small videos are already cheap to seek. Proxy only large inputs on devices
+  // that benefit from it, and do the work after import so the UI opens instantly.
+  if (profile.tier === 'high' || videoFile.size_bytes < 80 * 1024 * 1024) return;
+  if (proxyJobs.has(projectId)) return;
+  proxyJobs.add(projectId);
+  const previewId = `${projectId}_preview_${Date.now()}`;
+  try {
+    const { size_bytes } = await createPreviewProxy(videoFile.path, previewId, profile.previewWidth);
+    const preview: FileUpload = {
+      file_id: previewId,
+      filename: `${videoFile.filename}.preview.mp4`,
+      file_type: 'video',
+      size_bytes,
+      path: previewId,
+      duration: videoFile.duration,
+      width: profile.previewWidth,
+      height: 0,
+      fps: 30,
+    };
+    await dbRegisterFile({
+      file_id: previewId,
+      filename: preview.filename,
+      file_type: 'video',
+      size_bytes,
+      opfs_id: previewId,
+      project_id: projectId,
+      duration: preview.duration,
+      width: preview.width,
+      height: preview.height,
+    });
+    await dbUpdateProject(projectId, { preview_file: preview });
+    registerPreviewSource(videoFile.path, previewId);
+    const store = useProjectStore.getState();
+    if (store.currentProjectId === projectId && store.currentProject) {
+      useProjectStore.setState({ currentProject: { ...store.currentProject, preview_file: preview } });
+    }
+  } catch (error) {
+    console.warn('Preview proxy generation skipped:', error);
+  } finally {
+    proxyJobs.delete(projectId);
+  }
+}
+
 interface ProjectState {
   projects: Project[];
   currentProjectId: string | null;
@@ -74,6 +122,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ loading: true });
     const projects = await dbListProjects();
     set({ projects, loading: false });
+    const { currentProjectId, selectProject } = get();
+    if (!currentProjectId && projects.length > 0) {
+      await selectProject(projects[0].project_id);
+    }
   },
 
   createProject: async (name) => {
@@ -122,6 +174,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     projectIdGlobal = id;
     const project = await dbGetProject(id);
     set({ currentProjectId: id, currentProject: project, loading: false });
+    if (project?.video_file?.path && project.preview_file?.path) {
+      registerPreviewSource(project.video_file.path, project.preview_file.path);
+    } else if (project?.video_file) {
+      void preparePreviewProxy(id, project.video_file);
+    }
 
     // Heal projects whose video metadata was captured by the old probe that
     // returned 0x0 @ 30fps on files with parenthesized pixel-format fields
@@ -164,8 +221,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   setFile: async (fileType, file, onProgress) => {
-    const { currentProjectId, currentProject } = get();
-    if (!currentProjectId || !currentProject) return;
+    let currentProjectId = get().currentProjectId;
+    let currentProject = get().currentProject;
+    if (!currentProjectId || !currentProject) {
+      const cleanName = file.name.replace(/\.[^/.]+$/, '').slice(0, 32) || 'My Project';
+      const created = await get().createProject(cleanName);
+      currentProjectId = created.project_id;
+      currentProject = created;
+    }
 
     const fileId = `${currentProjectId}_${fileType}_${Date.now()}`;
 
@@ -208,6 +271,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const updatedProject = { ...currentProject, [key]: fileData };
     await dbUpdateProject(currentProjectId, { [key]: fileData });
     set({ currentProject: updatedProject });
+    if (fileType === 'video') void preparePreviewProxy(currentProjectId, fileData);
   },
 
   refreshProject: async () => {

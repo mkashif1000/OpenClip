@@ -1,12 +1,14 @@
 /**
  * ffmpeg.wasm service — singleton wrapper around @ffmpeg/ffmpeg.
  * Handles: video probing, segment extraction, audio extraction, muxing.
- * Uses multi-threaded core (requires COOP/COEP headers).
+ * Uses the multi-threaded core on capable devices and the smaller single-thread
+ * core on low-end devices (both require the same COOP/COEP headers).
  */
 
 import { FFmpeg, FFFSType } from '@ffmpeg/ffmpeg';
 import { toBlobURL } from '@ffmpeg/util';
 import { opfsReadBytes, opfsWriteBytes, opfsReadFile } from './opfs';
+import { getPerformanceProfile } from './performanceProfile';
 
 export interface VideoInfo {
   duration: number;
@@ -39,12 +41,16 @@ export async function ensureFFmpegLoaded(
 
       // Use CDN-hosted WASM for simplicity. The toBlobURL helper fetches
       // with credentials and re-serves from a blob: URL to satisfy COOP/COEP.
-      const baseURL = 'https://unpkg.com/@ffmpeg/core-mt@0.12.6/dist/esm';
-      await ff.load({
-        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-        workerURL: await toBlobURL(`${baseURL}/ffmpeg-core.worker.js`, 'text/javascript'),
-      });
+       const lowEnd = getPerformanceProfile().tier === 'low';
+       const baseURL = lowEnd
+         ? 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm'
+         : 'https://unpkg.com/@ffmpeg/core-mt@0.12.6/dist/esm';
+       const config = {
+         coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+         wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+         ...(lowEnd ? {} : { workerURL: await toBlobURL(`${baseURL}/ffmpeg-core.worker.js`, 'text/javascript') }),
+       };
+       await ff.load(config);
 
       ffmpegInstance = ff;
     })();
@@ -86,6 +92,16 @@ export async function probeVideo(fileId: string): Promise<VideoInfo> {
  * Used during the upload flow for immediate metadata extraction.
  */
 export async function probeVideoFile(file: File): Promise<VideoInfo> {
+  // Most browsers can provide the metadata without loading the ~30 MB FFmpeg
+  // core or copying the entire upload into WASM memory. The FFmpeg probe below
+  // remains the accuracy fallback for fps/codec when native metadata is absent.
+  try {
+    const native = await probeVideoElement(file);
+    if (native.width && native.height && native.duration > 0) return native;
+  } catch {
+    // Fall through to FFmpeg for unusual containers/codecs.
+  }
+
   const ff = await ensureFFmpegLoaded();
 
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -107,6 +123,37 @@ export async function probeVideoFile(file: File): Promise<VideoInfo> {
   await ff.deleteFile('probe_input.mp4').catch(() => {});
 
   return parseFFmpegProbeOutput(stderrOutput);
+}
+
+async function probeVideoElement(file: File): Promise<VideoInfo> {
+  const url = URL.createObjectURL(file);
+  const video = document.createElement('video');
+  video.preload = 'metadata';
+  video.muted = true;
+  video.src = url;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timeout = window.setTimeout(() => reject(new Error('native metadata timeout')), 12_000);
+      const cleanup = () => window.clearTimeout(timeout);
+      video.onloadedmetadata = () => { cleanup(); resolve(); };
+      video.onerror = () => { cleanup(); reject(new Error('native metadata unavailable')); };
+    });
+    return {
+      duration: Number.isFinite(video.duration) ? video.duration : 0,
+      width: video.videoWidth,
+      height: video.videoHeight,
+      // Native HTMLVideoElement does not expose source fps. Keep the safe
+      // default; the FFmpeg fallback still provides the exact value when it is
+      // required by an older project or an unsupported container.
+      fps: 30,
+      codec: '',
+      hasAudio: true,
+    };
+  } finally {
+    video.removeAttribute('src');
+    video.load();
+    URL.revokeObjectURL(url);
+  }
 }
 
 function parseFFmpegProbeOutput(stderr: string): VideoInfo {
@@ -198,6 +245,37 @@ export async function extractSegment(
   return outputId;
 }
 
+/**
+ * Create a small, silent proxy for responsive thumbnails/scrubbing. The source
+ * remains untouched and final exports always use the original video.
+ */
+export async function createPreviewProxy(
+  fileId: string,
+  outputId: string,
+  maxWidth = 540,
+): Promise<{ size_bytes: number; width: number; height: number }> {
+  const ff = await ensureFFmpegLoaded();
+  const source = await opfsReadFile(fileId);
+  const dir = '/mnt_proxy';
+  const output = 'preview_proxy.mp4';
+  try { await ff.createDir(dir); } catch { /* exists */ }
+  await ff.mount(FFFSType.WORKERFS, { blobs: [{ name: 'src', data: source }] }, dir);
+  try {
+    await ff.exec([
+      '-y', '-i', `${dir}/src`,
+      '-vf', `scale='min(${maxWidth},iw)':-2`,
+      '-an', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '30',
+      '-movflags', '+faststart', output,
+    ]);
+    const bytes = await ff.readFile(output) as Uint8Array;
+    await opfsWriteBytes(outputId, bytes);
+    return { size_bytes: bytes.byteLength, width: maxWidth, height: 0 };
+  } finally {
+    await ff.deleteFile(output).catch(() => {});
+    await ff.unmount(dir).catch(() => {});
+  }
+}
+
 /** Optional background music to mix into the rendered audio. */
 export interface MusicMix {
   fileId: string;    // OPFS id of the music file (mp3/wav/m4a etc.)
@@ -208,6 +286,13 @@ export interface MusicMix {
 export interface SfxTrack {
   pcm: Uint8Array;   // interleaved stereo float32 little-endian
   sampleRate: number;
+}
+
+function audioFilter(normalize: boolean, clean: boolean): string {
+  const filters: string[] = [];
+  if (clean) filters.push('highpass=f=80', 'lowpass=f=12000', 'afftdn=nf=-25');
+  if (normalize) filters.push('loudnorm=I=-16:TP=-1.5:LRA=11');
+  return filters.join(',');
 }
 
 /**
@@ -221,10 +306,12 @@ export async function extractAudio(
   durationSec: number,
   music?: MusicMix | null,
   sfx?: SfxTrack | null,
+  normalize = false,
+  cleanAudio = false,
 ): Promise<Uint8Array> {
   if (music || sfx) {
     try {
-      return await extractAudioWithExtras(fileId, startSec, durationSec, music ?? null, sfx ?? null);
+      return await extractAudioWithExtras(fileId, startSec, durationSec, music ?? null, sfx ?? null, normalize, cleanAudio);
     } catch (err) {
       console.warn('Audio mix (music/sfx) failed; falling back to source-only audio:', err);
       // fall through to source-only extraction
@@ -239,6 +326,7 @@ export async function extractAudio(
     '-i', input,
     '-t', String(durationSec),
     '-vn',              // no video
+    ...((normalize || cleanAudio) ? ['-af', audioFilter(normalize, cleanAudio)] : []),
     '-acodec', 'aac',
     '-b:a', '128k',
     OUT,
@@ -287,6 +375,8 @@ async function extractAudioWithExtras(
   durationSec: number,
   music: MusicMix | null,
   sfx: SfxTrack | null,
+  normalize: boolean,
+  cleanAudio: boolean,
 ): Promise<Uint8Array> {
   const ff = await ensureFFmpegLoaded();
   const OUT = 'audio_mix_out.aac';
@@ -315,7 +405,8 @@ async function extractAudioWithExtras(
   }
 
   // amix labels: source unchanged, music as [m], sfx as [${sfxIdx}:a].
-  const mixLabels = [`[${srcIdx}:a]`];
+  const mixLabels = [normalize ? '[srcnorm]' : `[${srcIdx}:a]`];
+  if (normalize || cleanAudio) filterParts.push(`[${srcIdx}:a]${audioFilter(normalize, cleanAudio)}[srcnorm]`);
   if (musIdx >= 0) mixLabels.push('[m]');
   if (sfxIdx >= 0) mixLabels.push(`[${sfxIdx}:a]`);
   filterParts.push(
@@ -490,6 +581,8 @@ export async function extractConcatAudioAac(
   segments: Array<{ start: number; end: number }>,
   music?: MusicMix | null,
   sfx?: SfxTrack | null,
+  normalize = false,
+  cleanAudio = false,
 ): Promise<Uint8Array> {
   const SR = 44100;
   const parts: Uint8Array[] = [];
@@ -519,7 +612,8 @@ export async function extractConcatAudioAac(
       const inputs: string[] = ['-f', 'f32le', '-ar', String(SR), '-ac', '2', '-i', 'concat.pcm'];
       let nextIdx = 1;
       const filterParts: string[] = [];
-      const mixLabels = ['[0:a]'];
+       const mixLabels = [normalize ? '[srcnorm]' : '[0:a]'];
+       if (normalize || cleanAudio) filterParts.push(`[0:a]${audioFilter(normalize, cleanAudio)}[srcnorm]`);
 
       if (music) {
         const musicFile = await opfsReadFile(music.fileId);
@@ -538,9 +632,9 @@ export async function extractConcatAudioAac(
         mixLabels.push(`[${nextIdx}:a]`);
         nextIdx++;
       }
-      filterParts.push(
-        `${mixLabels.join('')}amix=inputs=${mixLabels.length}:duration=first:dropout_transition=0:normalize=0[a]`,
-      );
+       filterParts.push(
+         `${mixLabels.join('')}amix=inputs=${mixLabels.length}:duration=first:dropout_transition=0:normalize=0[a]`,
+       );
 
       try {
         await ff.exec([
@@ -569,7 +663,8 @@ export async function extractConcatAudioAac(
   await ff.exec([
     '-y',
     '-f', 'f32le', '-ar', String(SR), '-ac', '2',
-    '-i', 'concat.pcm',
+     '-i', 'concat.pcm',
+     ...((normalize || cleanAudio) ? ['-af', audioFilter(normalize, cleanAudio)] : []),
     '-acodec', 'aac', '-b:a', '128k',
     'concat_out.aac',
   ]);

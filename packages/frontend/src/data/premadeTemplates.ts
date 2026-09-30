@@ -237,7 +237,12 @@ function creatorStyle(
 }
 
 export function getPodcastTemplate(id: string): PodcastTemplate | undefined {
-  return PODCAST_TEMPLATES.find((t) => t.id === id);
+  const template = PODCAST_TEMPLATES.find((t) => t.id === id);
+  if (!template) return undefined;
+  const saved = loadTemplateOverride(id);
+  return { ...template, layout: saved?.layout ?? template.layout,
+    hideTitle: saved?.title.enabled === undefined ? template.hideTitle : !saved.title.enabled };
+
 }
 
 /**
@@ -250,6 +255,7 @@ export function getPodcastStyleConfig(id: string): StyleConfig | undefined {
   const tpl = getPodcastTemplate(id);
   if (!tpl) return undefined;
   const s = tpl.styles();
+  s.title.enabled = !tpl.hideTitle;
   const ov = loadTemplateOverride(id);
   if (ov) {
     s.subtitle = { ...s.subtitle, ...ov.subtitle, preset: ov.preset };

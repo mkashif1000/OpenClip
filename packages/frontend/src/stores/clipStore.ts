@@ -41,8 +41,9 @@ export const useClipStore = create<ClipState>((set, get) => ({
     if (!projectId) return;
 
     const clips = await detectClipsFromSrt(srtFileId, params);
+    if (!clips.length) throw new Error('No clips matched. Try a shorter minimum length or the AI finder. Existing clips were kept.');
     await dbSaveClips(projectId, clips);
-    set({ clips });
+    if (getCurrentProjectId() === projectId) set({ clips });
   },
 
   loadJsonClips: async (jsonFileId, srtFileId) => {
@@ -50,8 +51,9 @@ export const useClipStore = create<ClipState>((set, get) => ({
     if (!projectId) return;
 
     const clips = await loadClipsFromJsonFile(jsonFileId, srtFileId);
+    if (!clips.length) throw new Error('No usable clips found in this JSON. Existing clips were kept.');
     await dbSaveClips(projectId, clips);
-    set({ clips });
+    if (getCurrentProjectId() === projectId) set({ clips });
   },
 
   loadClipsFromParsed: async (jsonData) => {
@@ -62,8 +64,9 @@ export const useClipStore = create<ClipState>((set, get) => ({
     if (!srtId) throw new Error('Generate or upload subtitles first, then load clips.');
 
     const clips = await loadClipsFromJsonData(jsonData, srtId);
+    if (!clips.length) return 0;
     await dbSaveClips(projectId, clips);
-    set({ clips });
+    if (getCurrentProjectId() === projectId) set({ clips });
     return clips.length;
   },
 

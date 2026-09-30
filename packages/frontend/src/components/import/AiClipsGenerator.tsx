@@ -11,7 +11,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Copy, Check, Wand2, ExternalLink, Loader2, ClipboardPaste, AlertTriangle,
+  Copy, Check, Wand2, ArrowRight, ExternalLink, Loader2, ClipboardPaste, AlertTriangle,
   ChevronUp, ChevronDown,
 } from 'lucide-react';
 import { useProjectStore } from '@/stores/projectStore';
@@ -20,7 +20,7 @@ import { useUIStore } from '@/stores/uiStore';
 import { buildClipPrompt, CHATBOTS } from '@/lib/clipPrompt';
 import { sanitizeAndParseClipsJson } from '@/lib/clipJsonParse';
 
-export function AiClipsGenerator() {
+export function AiClipsGenerator({ onContinue, continueLabel = 'Edit Clips', onBusyChange, appearance = 'default' }: { onContinue?: () => void; continueLabel?: string; onBusyChange?: (busy: boolean) => void; appearance?: 'default' | 'quick' } = {}) {
   const project = useProjectStore((s) => s.currentProject);
   const loadClipsFromParsed = useClipStore((s) => s.loadClipsFromParsed);
   const setActiveTab = useUIStore((s) => s.setActiveTab);
@@ -42,6 +42,7 @@ export function AiClipsGenerator() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  useEffect(() => { onBusyChange?.(busy); return () => onBusyChange?.(false); }, [busy, onBusyChange]);
 
   // Build the transcript once the SRT exists.
   useEffect(() => {
@@ -106,18 +107,19 @@ export function AiClipsGenerator() {
 
   if (!srtId) {
     return (
-      <p className="text-xs text-text-dim">Generate or upload subtitles in Step 2 first — the AI needs the transcript.</p>
+      <p className="text-xs text-text-dim">Generate or upload a transcript in Step 2 first.</p>
     );
   }
 
   const tooLong = words > 14000;
 
   return (
-    <div className="w-full space-y-3">
+    <div className={appearance === 'quick' ? 'quick-ai-flow' : 'w-full space-y-3'}>
       {/* ── Step 1 · Customize ─────────────────────────────────────── */}
       <Step n={1} title="Customize" subtitle="Tell the AI what you want.">
         <label className="block text-[11px] text-text-dim mb-1.5">Extra instructions (optional)</label>
         <textarea
+          aria-label="Extra instructions"
           value={extra}
           onChange={(e) => setExtra(e.target.value)}
           rows={2}
@@ -183,6 +185,7 @@ export function AiClipsGenerator() {
       {/* ── Step 3 · Load ──────────────────────────────────────────── */}
       <Step n={3} title="Paste the reply" subtitle="Code fences or extra text are fine — they’re cleaned automatically.">
         <textarea
+          aria-label="AI clip reply"
           value={pasted}
           onChange={(e) => { setPasted(e.target.value); setError(null); setSuccess(null); }}
           rows={4}
@@ -200,10 +203,10 @@ export function AiClipsGenerator() {
           </button>
           {success && (
             <button
-              onClick={() => setActiveTab('edit')}
+              onClick={onContinue ?? (() => setActiveTab('edit'))}
               className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl glass-subtle border border-white/10 text-text hover:bg-white/8 text-sm font-medium"
             >
-              <Wand2 className="w-3.5 h-3.5" /> Edit Clips
+              {appearance === 'quick' ? <ArrowRight className="w-3.5 h-3.5" /> : <Wand2 className="w-3.5 h-3.5" />} {continueLabel}
             </button>
           )}
           {success && (
@@ -227,7 +230,7 @@ function Step({
   n, title, subtitle, children,
 }: { n: number; title: string; subtitle?: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-xl bg-white/[0.03] border border-white/8 p-3.5">
+    <div className="ai-clip-step rounded-xl bg-white/[0.03] border border-white/8 p-3.5">
       <div className="flex items-center gap-2.5 mb-3">
         <span className="w-6 h-6 rounded-full bg-white text-black text-[12px] font-bold flex items-center justify-center shrink-0 shadow-soft">
           {n}

@@ -26,6 +26,8 @@ import {
 } from './encodeCore';
 import { buildBrollSfxTrack } from './sfxBuilder';
 import { ensureFontsLoaded } from './fontLoader';
+import { getPerformanceProfile, yieldToBrowser } from './performanceProfile';
+import type { AutoSplitFrame } from './autoSplitPolicy';
 
 export interface RenderJob {
   videoOpfsId: string;
@@ -35,6 +37,8 @@ export interface RenderJob {
   logoConfig?: { x: number; y: number; size: number; opacity: number } | null;
   musicOpfsId?: string | null;
   musicVolume?: number;
+  normalizeAudio?: boolean;
+  cleanAudio?: boolean;
   pipConfig?: PIPConfig | null;
   layoutType: LayoutType;
   pipStartSec?: number;
@@ -59,7 +63,7 @@ export interface RenderProgress {
   percent: number;
   eta: number;
   currentFps: number;
-  phase: 'extracting' | 'encoding' | 'muxing' | 'done';
+  phase: 'verifying faces' | 'extracting' | 'encoding' | 'muxing' | 'done';
 }
 
 type ProgressCallback = (p: RenderProgress) => void;
@@ -97,6 +101,7 @@ export async function renderClip(
   // encoder all agree.
   const outW = outputWidth - (outputWidth % 2);
   const outH = outputHeight - (outputHeight % 2);
+  onProgress({ clipId: clip.clip_id, percent: 2, eta: 0, currentFps: 0, phase: 'extracting' });
 
   // Precompute per-frame source times and face centers so the encode spec is
   // fully serializable (plain data) and can cross into the worker unchanged.
@@ -106,6 +111,35 @@ export async function renderClip(
   if (job.faceTrack) {
     faceCenters = new Array(totalFrames);
     for (let i = 0; i < totalFrames; i++) faceCenters[i] = job.faceTrack.at(frameSrcTimes[i]);
+  }
+
+  // Verify the same decoded source frames that the export will consume, after
+  // silence cuts. Manual layouts always take precedence over automatic splits.
+  let autoSplitFrames: (AutoSplitFrame | null)[] | null = null;
+  const autoSplitFaces = styleConfig.export?.auto_split_faces === true;
+  const autoSplitScreenShare = styleConfig.export?.auto_split_screen_share === true;
+  if ((autoSplitFaces || autoSplitScreenShare) && outH > outW && job.layoutType === 'standard') {
+    signal.throwIfAborted();
+    onProgress({ clipId: clip.clip_id, percent: 2, eta: 0, currentFps: 0, phase: 'verifying faces' });
+    try {
+      const { buildAutoSplitFrames } = await import('./autoSplitAnalyzer');
+      const file = await opfsReadFile(videoOpfsId);
+      signal.throwIfAborted();
+      autoSplitFrames = await buildAutoSplitFrames({
+        file, frameSrcTimes, fps, outputWidth: outW, outputHeight: outH, signal,
+        autoSplitFaces, autoSplitScreenShare,
+        onProgress: (done) => onProgress({
+          clipId: clip.clip_id, percent: 2 + 2 * Math.min(1, done / Math.max(totalFrames, 1)),
+          eta: 0, currentFps: 0, phase: 'verifying faces',
+        }),
+      });
+      signal.throwIfAborted();
+    } catch (err) {
+      signal.throwIfAborted();
+      if ((err as Error)?.name === 'AbortError') throw err;
+      console.warn('Automatic split verification unavailable; rendering without automatic splits:', err);
+      autoSplitFrames = null;
+    }
   }
 
   const spec: ClipEncodeSpec = {
@@ -122,6 +156,7 @@ export async function renderClip(
     totalFrames,
     frameSrcTimes,
     faceCenters,
+    autoSplitFrames,
     regionCrops: job.regionCrops ?? null,
     layoutRange: job.layoutRange ?? null,
   };
@@ -141,21 +176,17 @@ export async function renderClip(
     }
   }
 
-  onProgress({ clipId: clip.clip_id, percent: 2, eta: 0, currentFps: 0, phase: 'extracting' });
-
   // Load caption/title fonts for the main-thread render paths (seek capture +
   // ffmpeg fallback draw with the document FontFaceSet). The worker path loads
   // its own copy. Best-effort — never blocks the render on a font failure.
   await ensureFontsLoaded([
-    styleConfig?.subtitle?.font_name,
-    styleConfig?.title?.font_name,
-    (clip as { edits?: { titleFont?: string } })?.edits?.titleFont,
+    styleConfig?.subtitle?.font_name || 'Arial',
+    styleConfig?.subtitle?.accent_font_name,
+    clip.edits?.titleFont || styleConfig?.title?.font_name || 'Inter',
   ]).catch(() => {});
 
   // ffmpeg is needed for both audio extraction and the wasm fallback paths.
   signal.throwIfAborted();
-  await ensureFFmpegLoaded();
-
   onProgress({ clipId: clip.clip_id, percent: 4, eta: 0, currentFps: 0, phase: 'encoding' });
 
   const webCodecsOk = await isWebCodecsSupported();
@@ -276,6 +307,9 @@ export async function renderClip(
   // SFX into the audio when there are real cuts to punctuate.
   onProgress({ clipId: clip.clip_id, percent: 92, eta: 0, currentFps: 0, phase: 'extracting' });
   signal.throwIfAborted();
+  // Defer the large FFmpeg core until it is actually needed for audio/muxing or
+  // the browser fallback. This keeps import and WebCodecs video rendering fast.
+  await ensureFFmpegLoaded();
   const music = job.musicOpfsId
     ? { fileId: job.musicOpfsId, volume: job.musicVolume ?? 0.1 }
     : null;
@@ -292,8 +326,8 @@ export async function renderClip(
   }
 
   const audioAac = keeps
-    ? await extractConcatAudioAac(videoOpfsId, keeps, music, sfx)
-    : await extractAudio(videoOpfsId, clip.start_time, clip.duration, music, sfx);
+    ? await extractConcatAudioAac(videoOpfsId, keeps, music, sfx, job.normalizeAudio, job.cleanAudio)
+    : await extractAudio(videoOpfsId, clip.start_time, clip.duration, music, sfx, job.normalizeAudio, job.cleanAudio);
 
   if (videoH264) {
     onProgress({ clipId: clip.clip_id, percent: 95, eta: 0, currentFps: 0, phase: 'muxing' });
@@ -393,6 +427,7 @@ function renderViaWorker(opts: {
         totalFrames: spec.totalFrames,
         frameSrcTimes: spec.frameSrcTimes,
         faceCenters: spec.faceCenters,
+        autoSplitFrames: spec.autoSplitFrames ?? null,
         regionCrops: spec.regionCrops ?? null,
         layoutRange: spec.layoutRange ?? null,
         demuxStartSec,
@@ -418,6 +453,9 @@ async function encodeViaSeek(opts: {
   onProgress: (framesDone: number) => void;
 }): Promise<Uint8Array> {
   const { video, spec, logoImg, signal, onProgress } = opts;
+  // Seeking cannot attest which decoded frame is displayed. Never apply a
+  // verified split using the requested seek time as a substitute timestamp.
+  const seekSpec: ClipEncodeSpec = { ...spec, autoSplitFrames: null };
 
   const encodedChunks: EncodedVideoChunk[] = [];
   let encoderError: Error | null = null;
@@ -440,13 +478,14 @@ async function encodeViaSeek(opts: {
       if (encoderError) throw encoderError;
       await seekVideo(video, spec.frameSrcTimes[i]);
       if (encoderError) throw encoderError;
-      while (encoder.encodeQueueSize > 30) {
+       while (encoder.encodeQueueSize > getPerformanceProfile().encoderQueueLimit) {
         await new Promise((r) => setTimeout(r, 0));
         signal.throwIfAborted();
         if (encoderError) throw encoderError;
       }
-      emitFrame(encoder, canvas, spec, logoImg, i, video as VideoSourceLike);
-      onProgress(i + 1);
+       emitFrame(encoder, canvas, seekSpec, logoImg, i, video as VideoSourceLike);
+       onProgress(i + 1);
+       if ((i + 1) % getPerformanceProfile().shouldYieldEveryFrames === 0) await yieldToBrowser();
     }
     if (encoderError) throw encoderError;
     await encoder.flush();
@@ -517,6 +556,9 @@ async function encodeWithFFmpegFallback(opts: {
       pipEndSec: spec.pipEndSec,
       width: outputWidth, height: outputHeight,
       faceCenter: spec.faceCenters?.[i] ?? null,
+      autoSplitFrame: null, // HTMLVideoElement fallback has no verified frame timestamp.
+      regionCrops: spec.regionCrops ?? undefined,
+      layoutRange: spec.layoutRange ?? undefined,
     });
 
     // getImageData returns a fresh buffer each call, so this view is safe to keep.

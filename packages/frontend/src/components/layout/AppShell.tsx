@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
-import { Film, RefreshCw, X } from 'lucide-react';
+import { RefreshCw, X } from 'lucide-react';
 import { useUIStore } from '@/stores/uiStore';
-import { useProjectStore } from '@/stores/projectStore';
 import { isChunkLoadError, reloadForUpdate } from '@/lib/chunkReload';
 
 import { ImportTab } from '@/components/tabs/ImportTab';
@@ -11,10 +10,15 @@ import { EditTab } from '@/components/tabs/EditTab';
 import { StyleTab } from '@/components/tabs/StyleTab';
 import { ProcessTab } from '@/components/tabs/ProcessTab';
 import { SettingsModal } from '@/components/settings/SettingsModal';
+import { LandingPage } from '@/components/landing/LandingPage';
+import { QuickModeWorkspace } from '@/components/quick/QuickModeWorkspace';
 
 export function AppShell() {
   const activeTab = useUIStore((s) => s.activeTab);
-  const projectId = useProjectStore((s) => s.currentProjectId);
+  const setActiveTab = useUIStore((s) => s.setActiveTab);
+  const workspaceMode = useUIStore((s) => s.workspaceMode);
+  const isLandingPage = useUIStore((s) => s.isLandingPage);
+  const setLandingPage = useUIStore((s) => s.setLandingPage);
   const [updateAvailable, setUpdateAvailable] = useState(false);
 
   // Ask the browser to mark OPFS as persistent so multi-GB videos don't get
@@ -28,6 +32,28 @@ export function AppShell() {
       } catch { /* best-effort */ }
     })();
   }, []);
+
+  // Small, discoverable keyboard layer for power users. It deliberately avoids
+  // intercepting typing inside inputs and textareas.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.matches('input, textarea, select, [contenteditable="true"]')) return;
+      if (event.key === 'Escape') {
+        import('@/services/renderService').then(({ cancelRender }) => cancelRender()).catch(() => {});
+        return;
+      }
+      if (!event.ctrlKey && !event.metaKey) return;
+      const tabs = ['import', 'edit', 'style', 'process'] as const;
+      const index = Number(event.key) - 1;
+      if (index >= 0 && index < tabs.length) {
+        event.preventDefault();
+        setActiveTab(tabs[index]);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [setActiveTab]);
 
   // Stale-deploy detection. Vite emits `vite:preloadError` when a hashed
   // chunk URL referenced by index.html no longer exists on the CDN (which
@@ -63,6 +89,20 @@ export function AppShell() {
     };
   }, []);
 
+  if (isLandingPage) {
+    return (
+      <div className="min-h-screen bg-[#070709] text-text relative">
+        <LandingPage onOpenWorkspace={() => setLandingPage(false)} />
+        <SettingsModal />
+        {updateAvailable && <UpdateAvailableBanner onDismiss={() => setUpdateAvailable(false)} />}
+      </div>
+    );
+  }
+
+  if (workspaceMode === 'quick') {
+    return <QuickModeWorkspace />;
+  }
+
   return (
     <div className="h-screen flex flex-col bg-[#080808] relative overflow-hidden">
       {/* Ambient light bloom — purely cosmetic, fixed behind everything. */}
@@ -75,26 +115,19 @@ export function AppShell() {
             'radial-gradient(700px 380px at 90% 95%, rgba(255,255,255,0.04), transparent 70%)',
         }}
       />
-      <div className="px-4 pt-4 pb-2">
+      <div className="px-3 pt-3 pb-2 sm:px-6 sm:pt-4">
         <Header />
       </div>
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
         <div className="flex-1 flex flex-col overflow-hidden bg-surface rounded-tl-2xl border-t border-l border-border relative z-0">
           <div className="flex-1 overflow-auto">
-            {!projectId ? (
-              <EmptyState />
-            ) : (
-              // h-full so children using `h-full` (EditTab) get a real height
-              // to size against; otherwise the page scrolls instead of
-              // clipping the timeline / preview inside the tab.
-              <div key={activeTab} className="animate-rise h-full">
-                {activeTab === 'import' && <ImportTab />}
-                {activeTab === 'edit' && <EditTab />}
-                {activeTab === 'style' && <StyleTab />}
-                {activeTab === 'process' && <ProcessTab />}
-              </div>
-            )}
+            <div key={activeTab} className="animate-rise h-full">
+              {activeTab === 'import' && <ImportTab />}
+              {activeTab === 'edit' && <EditTab />}
+              {activeTab === 'style' && <StyleTab />}
+              {activeTab === 'process' && <ProcessTab />}
+            </div>
           </div>
         </div>
       </div>
@@ -134,30 +167,6 @@ function UpdateAvailableBanner({ onDismiss }: { onDismiss: () => void }) {
       >
         <X className="w-4 h-4" />
       </button>
-    </div>
-  );
-}
-
-function EmptyState() {
-  const createProject = useProjectStore((s) => s.createProject);
-
-  return (
-    <div className="h-full flex items-center justify-center px-6">
-      <div className="text-center -mt-10 animate-rise-slow max-w-md">
-        <div className="mx-auto mb-5 w-16 h-16 rounded-2xl glass flex items-center justify-center">
-          <Film className="w-7 h-7 text-text/80" strokeWidth={1.5} />
-        </div>
-        <h2 className="text-2xl font-semibold text-text mb-2 tracking-tight">No Project Selected</h2>
-        <p className="text-text-muted mb-7 leading-relaxed">
-          Create a new project to import a video and start generating clips.
-        </p>
-        <button
-          onClick={() => createProject('My Project')}
-          className="px-7 py-3 rounded-xl bg-white text-black font-medium hover:bg-accent-hover transition-colors"
-        >
-          Create Project
-        </button>
-      </div>
     </div>
   );
 }

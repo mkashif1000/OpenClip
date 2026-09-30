@@ -2,13 +2,21 @@
   "name": "openclip",
   "version": "1.0.0",
   "private": true,
-  "workspaces": ["packages/frontend", "packages/shared"],
+  "workspaces": [
+    "packages/frontend",
+    "packages/shared"
+  ],
   "scripts": {
     "dev": "npm run dev --workspace=@viral-clipper/frontend",
     "build": "npm run build --workspace=@viral-clipper/frontend",
-    "preview": "npm run preview --workspace=@viral-clipper/frontend"
+    "preview": "npm run preview --workspace=@viral-clipper/frontend",
+    "test:visual": "playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/pngjs": "^6.0.5",
+    "pixelmatch": "^7.2.0",
+    "pngjs": "^7.0.0",
     "typescript": "~5.6.3"
   }
 }

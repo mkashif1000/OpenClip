@@ -1,3 +1,5 @@
+import { subtitleStyleFromConfig } from '@viral-clipper/shared/rendering/subtitleConfig';
+import { titleStyleFromConfig } from '@viral-clipper/shared/rendering/titleConfig';
 import { Player, type PlayerRef } from '@remotion/player';
 import {
   ClipComposition, PIPComposition, HybridComposition, MultiSplitComposition,
@@ -5,6 +7,7 @@ import {
 } from '@viral-clipper/shared/compositions';
 import { useStyleStore } from '@/stores/styleStore';
 import type { ClipData, SubtitleStyle, TitleStyle, PIPBox } from '@/types';
+import { getPerformanceProfile } from '@/services/performanceProfile';
 
 export type { PlayerRef };
 
@@ -97,13 +100,19 @@ export function RemotionPreview({
   const subtitle = overrideSubtitle ?? styles.subtitle;
   const title = overrideTitle ?? styles.title;
 
-  const compWidth = width ?? exp.width;
-  const compHeight = height ?? exp.height;
+  const sourceWidth = width ?? exp.width;
+  const sourceHeight = height ?? exp.height;
+  // Keep final exports untouched, but render the interactive preview at a
+  // device-appropriate size so Remotion does not rasterize 1080p frames on a
+  // low-memory laptop while the user is scrubbing.
+  const previewLimit = getPerformanceProfile().previewWidth;
+  const previewScale = Math.min(1, previewLimit / Math.max(sourceWidth, sourceHeight));
+  const compWidth = Math.max(2, Math.round(sourceWidth * previewScale));
+  const compHeight = Math.max(2, Math.round(sourceHeight * previewScale));
   const fps = 30;
   const duration = clip?.duration ?? 30;
   const durationInFrames = Math.max(Math.ceil(duration * fps), 1);
 
-  const isVertical = exp.format !== 'horizontal';
 
   // Determine which composition to use. Split/gameplay layouts win when set,
   // otherwise we fall back to the PIP override or the plain ClipComposition.
@@ -115,11 +124,13 @@ export function RemotionPreview({
 
   const baseProps: Record<string, any> = {
     videoSrc: videoSegmentUrl,
-    title: clip?.title ?? 'Sample Title That Wraps to Multiple Lines',
+    title: clip?.edits?.customTitle ?? clip?.title ?? 'Sample Title That Wraps to Multiple Lines',
     entries: clip?.entries ?? [],
     clipStartSec: clip?.start_time ?? 0,
     // Title style
-    titleFontSize: title.font_size ?? (isVertical ? 32 : 22),
+    titleStyle: titleStyleFromConfig({ ...title, font_name: titleFontName ?? clip?.edits?.titleFont ?? title.font_name }, compWidth, compHeight, titleWordColors ?? clip?.edits?.titleColors),
+    titleEnabled: title.enabled,
+    titleFontSize: title.font_size ?? undefined,
     titleFontColor: title.font_color,
     titleBgColor: title.bg_color,
     titleBgOpacity: title.bg_opacity,
@@ -127,12 +138,12 @@ export function RemotionPreview({
     titlePosition: title.position as 'top' | 'center' | 'bottom',
     titlePositionY: title.position_y,
     titleBorderRadius: title.border_radius,
-    titleMaxChars: title.max_chars_per_line ?? (isVertical ? 25 : 45),
+    titleMaxChars: title.max_chars_per_line ?? undefined,
     ...(title.max_width != null ? { titleMaxWidthPct: title.max_width } : {}),
-    titleFontName: titleFontName || title.font_name,
+    titleFontName: titleFontName ?? clip?.edits?.titleFont ?? title.font_name,
     titleHighlightColor: title.highlight_color ?? '#FFD23F',
     titleAccentColor: title.accent_color ?? '#FF4D4D',
-    ...(titleWordColors && titleWordColors.length ? { titleWordColors } : {}),
+    titleWordColors: titleWordColors ?? clip?.edits?.titleColors,
     // Boxed layout (centered rounded inset) — only meaningful for ClipComposition.
     ...(boxed ? { boxed: true, boxRadiusPx, boxWidthPct, boxHeightPct, boxYPct } : {}),
     // Pass through B-roll overlays so the live preview shows what the export
@@ -143,14 +154,15 @@ export function RemotionPreview({
     ...(splitLayout && regionCrops && regionCrops.length ? { regionCrops } : {}),
     ...(splitLayout && splitRange ? { splitStartSec: splitRange.start, splitEndSec: splitRange.end } : {}),
     // Subtitle style
+    subtitleStyle: subtitleStyleFromConfig(subtitle, compWidth, compHeight),
     subtitlePrimaryColor: subtitle.primary_color,
     subtitleHighlightColor: subtitle.highlight_color,
     subtitleOutlineColor: subtitle.outline_color,
     subtitleOutlineWidth: subtitle.outline_width,
-    subtitleFontSize: subtitle.font_size ?? (isVertical ? 62 : 36),
+    subtitleFontSize: subtitle.font_size ?? undefined,
     subtitleFontName: subtitle.font_name,
     subtitleBold: subtitle.bold,
-    subtitleMarginV: subtitle.margin_v ?? (isVertical ? 120 : 60),
+    subtitleMarginV: subtitle.margin_v ?? undefined,
     ...(subtitle.max_width != null ? { subtitleMaxWidthPct: subtitle.max_width } : {}),
     subtitlePreset: subtitle.preset ?? 'karaoke',
     // Background music

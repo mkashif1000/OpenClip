@@ -1,3 +1,5 @@
+import type { DuoCaptionConfig } from '@viral-clipper/shared/rendering/duoConfig';
+
 export interface FileUpload {
   file_id: string;
   filename: string;
@@ -81,18 +83,40 @@ export interface ClipData {
   end_time: number;
   duration: number;
   score: number;
+  scoreReasons?: string[];
   preview_text: string;
   entries: SubtitleEntry[];
   status: 'pending' | 'processing' | 'completed' | 'failed';
   output_file: string | null;
+  /** Lightweight organization metadata for the clip library. */
+  favorite?: boolean;
+  tags?: string[];
+  notes?: string;
   /** Per-clip user edits from the Edit tab (transcript cuts, title, B-roll). */
   edits?: ClipEdits;
 }
 
 /** Caption look presets — implemented identically in the Remotion preview and the canvas export renderer. */
-export type CaptionPreset = 'karaoke' | 'pop' | 'box' | 'minimal';
+export type CaptionPreset = 'karaoke' | 'pop' | 'box' | 'minimal' | 'plain' | 'word';
 
-export interface SubtitleStyle {
+export interface SubtitleStyle extends DuoCaptionConfig {
+  enabled?: boolean;
+  italic?: boolean;
+  text_case?: 'upper' | 'lower' | 'original';
+  letter_spacing?: number;
+  line_height?: number;
+  position_x?: number;
+  rotation?: number;
+  text_align?: 'left' | 'center' | 'right';
+  bg_color?: string;
+  bg_opacity?: number;
+  bg_padding?: number;
+  bg_radius?: number;
+  shadow_color?: string;
+  shadow_blur?: number;
+  shadow_x?: number;
+  shadow_y?: number;
+  active_text_color?: string;
   font_name: string;
   font_size: number | null;
   bold: boolean;
@@ -108,6 +132,21 @@ export interface SubtitleStyle {
 }
 
 export interface TitleStyle {
+  enabled?: boolean;
+  bold?: boolean;
+  italic?: boolean;
+  text_case?: 'upper' | 'lower' | 'original';
+  letter_spacing?: number;
+  line_height?: number;
+  position_x?: number;
+  rotation?: number;
+  text_align?: 'left' | 'center' | 'right';
+  outline_color?: string;
+  outline_width?: number;
+  shadow_color?: string;
+  shadow_blur?: number;
+  shadow_x?: number;
+  shadow_y?: number;
   font_size: number | null;
   font_color: string;
   bg_color: string;
@@ -135,10 +174,23 @@ export interface ExportSettings {
   crf: number;
   preset: string;
   audio_bitrate: string;
+  /** Normalize final program loudness for social platforms. */
+  normalize_audio?: boolean;
+  /** Light speech cleanup before final AAC encoding. */
+  clean_audio?: boolean;
+  /** Preview-only social UI safe-zone overlay. */
+  show_safe_zones?: boolean;
   /** Cut silences and filler words at render time (requires Whisper word timestamps). */
   remove_silences?: boolean;
   /** Keep the speaker centered via on-device face tracking. */
   face_tracking?: boolean;
+  face_tracking_mode?: 'smart' | 'largest';
+  /** Split sustained, clear two-person shots after frame-by-frame verification. */
+  auto_split_faces?: boolean;
+  /** Split verified screen shares into content above and an enlarged corner-webcam speaker below. */
+  auto_split_screen_share?: boolean;
+  /** Center enabled captions at the seam only while either automatic split mode is active. */
+  auto_split_center_captions?: boolean;
   /** Overlay relevant stock B-roll (requires a transcript + a Pexels/Pixabay key). */
   broll?: boolean;
   /** Corner radius (output px) of the inset video in the 'boxed' layout. */
@@ -176,6 +228,8 @@ export interface Project {
   name: string;
   created_at: string;
   video_file: FileUpload | null;
+  /** Optional low-resolution proxy used only for thumbnails and editing previews. */
+  preview_file?: FileUpload | null;
   srt_file: FileUpload | null;
   json_file: FileUpload | null;
   clips: ClipData[];
@@ -206,7 +260,9 @@ export interface Template {
   name: string;
   description: string;
   styles: StyleConfig;
-  layout?: 'standard' | 'pip';
+  layout?: 'standard' | 'pip' | 'boxed' | 'split-2h' | 'split-2v';
+  region_crops?: Array<{ x: number; y: number; w: number; h: number }>;
+  layout_range?: { start: number; end: number } | null;
   pip_config?: PIPConfig;
 }
 
@@ -247,7 +303,7 @@ export interface JobComplete {
 
 export type WSMessage = ClipProgress | ClipComplete | ClipError | JobComplete;
 
-export type TabId = 'dashboard' | 'import' | 'edit' | 'style' | 'process';
+export type TabId = 'import' | 'edit' | 'style' | 'process';
 
 export const FORMAT_PRESETS: Record<string, { label: string; width: number; height: number; vertical: boolean }> = {
   // width/height are preview placeholders — the render derives real dimensions
@@ -273,6 +329,8 @@ export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
 };
 
 export const CAPTION_PRESETS: Record<CaptionPreset, { label: string; description: string }> = {
+  plain: { label: 'No highlight', description: 'A consistent color for every word' },
+  word: { label: 'One word', description: 'Show one spoken word at a time' },
   karaoke: { label: 'Karaoke', description: 'Active word changes color' },
   pop: { label: 'Word Pop', description: 'Active word pops bigger' },
   box: { label: 'Highlight Box', description: 'Active word on a color pill' },
@@ -302,8 +360,15 @@ export const DEFAULT_EXPORT: ExportSettings = {
   crf: 23,
   preset: 'fast',
   audio_bitrate: '128k',
+  normalize_audio: false,
+  clean_audio: false,
+  show_safe_zones: false,
   remove_silences: false,
   face_tracking: true,
+  face_tracking_mode: 'smart',
+  auto_split_faces: false,
+  auto_split_screen_share: false,
+  auto_split_center_captions: false,
   broll: false,
   box_radius: 40,
   box_width: 84,

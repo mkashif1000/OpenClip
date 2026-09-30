@@ -20,7 +20,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Film, Scissors, Loader2, ChevronLeft, ChevronRight, Download,
   Type, Upload, Pause, Play, RotateCcw, Layout as LayoutIcon, FileVideo, ListChecks,
-  CheckCircle2,
+  CheckCircle2, ImageDown,
 } from 'lucide-react';
 import { useProjectStore } from '@/stores/projectStore';
 import { useClipStore } from '@/stores/clipStore';
@@ -199,6 +199,9 @@ export function EditTab() {
   const [playheadSec, setPlayheadSec] = useState(clip?.start_time ?? 0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [selectedBrollId, setSelectedBrollId] = useState<string | null>(null);
+  const [transcriptOpen, setTranscriptOpen] = useState(true);
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const editorRef = useRef<HTMLDivElement>(null);
 
   // Reset playhead + selection when switching clips.
   useEffect(() => {
@@ -249,10 +252,62 @@ export function EditTab() {
   };
 
   // ─── Per-clip edits helpers ─────────────────────────────────────────
-  const updateEdits = (patch: Partial<ClipEdits>) => {
-    if (!clip) return;
+  const updateEdits = (patch: Partial<ClipEdits>): Promise<void> => {
+    if (!clip) return Promise.resolve();
     const merged: ClipEdits = { ...(clip.edits ?? {}), ...patch };
-    updateClip(clip.clip_id, { edits: merged }).catch(console.error);
+    // Keep the callback awaitable for the transcript's saving indicator while
+    // retaining the editor's existing autosave error handling.
+    return updateClip(clip.clip_id, { edits: merged }).catch(console.error);
+  };
+
+  const seekByFrames = (delta: number) => {
+    if (!player || !clip) return;
+    player.pause();
+    const currentFrame = Math.round((playheadSec - clip.start_time) * PREVIEW_FPS);
+    const nextFrame = Math.max(0, Math.min(Math.round(clip.duration * PREVIEW_FPS), currentFrame + delta));
+    player.seekTo(nextFrame);
+    setPlayheadSec(clip.start_time + nextFrame / PREVIEW_FPS);
+  };
+
+  // Playback shortcuts belong to the editor surface only. Form fields,
+  // contenteditable controls, modifier chords, and buttons keep their normal
+  // browser behavior so typing and existing controls remain safe.
+  const handleEditorKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const target = e.target as HTMLElement;
+    if (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(target.tagName)) return;
+    if (!player) return;
+    switch (e.key) {
+      case ' ':
+      case 'Spacebar':
+        e.preventDefault();
+        if (isPlaying) player.pause(); else player.play();
+        break;
+      case 'j':
+      case 'J':
+        e.preventDefault();
+        player.pause();
+        seekToSrcSec(playheadSec - 5);
+        break;
+      case 'k':
+      case 'K':
+        e.preventDefault();
+        player.pause();
+        break;
+      case 'l':
+      case 'L':
+        e.preventDefault();
+        player.play();
+        break;
+      case 'ArrowLeft':
+        e.preventDefault();
+        seekByFrames(-1);
+        break;
+      case 'ArrowRight':
+        e.preventDefault();
+        seekByFrames(1);
+        break;
+    }
   };
 
   // (Realtime cut-skip is handled inside the Remotion frameupdate handler above.)
@@ -269,6 +324,24 @@ export function EditTab() {
     await renderClipsAction([clip.clip_id]);
     // downloadClipAction reads the freshly-rendered blob from the store.
     downloadClipAction(clip.clip_id);
+  };
+
+  const handleDownloadCover = async () => {
+    if (!videoOpfsId || !clip) return;
+    try {
+      const { getClipThumbnail } = await import('@/services/thumbnails');
+      const url = await getClipThumbnail(videoOpfsId, playheadSec);
+      const response = await fetch(url);
+      const blob = await response.blob();
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = `clip_${String(clip.index).padStart(2, '0')}_cover.jpg`;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 5_000);
+    } catch (error) {
+      console.warn('Could not export cover frame:', error);
+    }
   };
 
   // ─── Empty states ───────────────────────────────────────────────────
@@ -295,16 +368,27 @@ export function EditTab() {
   if (!clip) return null;
 
   return (
-    <div className="h-full flex flex-col p-4 lg:p-6 gap-4 overflow-hidden">
+    <div
+      ref={editorRef}
+      tabIndex={0}
+      onKeyDown={handleEditorKeyDown}
+      onPointerDownCapture={(e) => {
+        const target = e.target as HTMLElement;
+        if (!target.closest('button,input,textarea,select,a,[contenteditable="true"]')) {
+          editorRef.current?.focus({ preventScroll: true });
+        }
+      }}
+      className="h-full flex flex-col p-3 sm:p-4 lg:p-6 gap-3 lg:gap-4 overflow-y-auto lg:overflow-hidden outline-none"
+    >
       {/* ─── Top header ────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between animate-rise gap-4">
+      <div className="flex flex-wrap items-center justify-between animate-rise gap-3">
         <div className="min-w-0">
           <h2 className="text-xl font-semibold text-text tracking-tight">Edit Clip</h2>
           <p className="text-xs text-text-muted">
             Trim, edit transcript, swap layout, and curate B-roll for each clip.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3 w-full sm:w-auto">
           <div className="hidden md:flex items-center gap-2 text-[10px] text-text-dim">
             <span>Edits autosave</span>
             <span className="w-1.5 h-1.5 rounded-full bg-success animate-soft-pulse" />
@@ -337,6 +421,14 @@ export function EditTab() {
               </>
             )}
           </button>
+          <button
+            onClick={handleDownloadCover}
+            disabled={!videoUrl || isProcessing}
+            className="hidden items-center gap-2 rounded-xl border border-white/10 bg-white/[.04] px-3 py-2 text-xs font-medium text-text-muted hover:bg-white/[.08] hover:text-text disabled:opacity-40 sm:flex"
+            title="Download the current frame as a cover image"
+          >
+            <ImageDown className="h-4 w-4" /> Cover
+          </button>
         </div>
       </div>
 
@@ -348,22 +440,55 @@ export function EditTab() {
         onSelect={(id) => selectClip(id)}
       />
 
+      {/* On compact screens the transcript and tools are drawers below the
+          preview. Desktop keeps the familiar three-column editor. */}
+      <div className="grid grid-cols-2 gap-2 lg:hidden" role="group" aria-label="Editor panels">
+        <button
+          type="button"
+          aria-expanded={transcriptOpen}
+          onClick={() => setTranscriptOpen((open) => !open)}
+          className="min-h-10 rounded-xl glass border border-white/10 px-3 py-2 text-xs font-medium text-text-muted hover:text-text hover:bg-white/8"
+        >
+          Transcript <span className="text-text-dim">· {transcriptOpen ? 'Hide' : 'Show'}</span>
+        </button>
+        <button
+          type="button"
+          aria-expanded={toolsOpen}
+          onClick={() => setToolsOpen((open) => !open)}
+          className="min-h-10 rounded-xl glass border border-white/10 px-3 py-2 text-xs font-medium text-text-muted hover:text-text hover:bg-white/8"
+        >
+          Tools <span className="text-text-dim">· {toolsOpen ? 'Hide' : 'Show'}</span>
+        </button>
+      </div>
+
       {/* ─── Main grid ────────────────────────────────────────────── */}
-      <div className="flex-1 grid grid-cols-12 gap-4 min-h-0 overflow-hidden">
+      <div className="flex-1 flex flex-col lg:grid lg:grid-cols-12 gap-3 lg:gap-4 min-h-0 lg:overflow-hidden">
         {/* Left: Transcript */}
-        <div className="col-span-3 rounded-2xl glass overflow-hidden flex flex-col animate-rise hairline-top">
+        <div className={cn(
+          'order-2 lg:order-none lg:col-span-3 rounded-2xl glass overflow-hidden flex flex-col animate-rise hairline-top min-h-[18rem] max-h-[55vh] lg:max-h-none',
+          !transcriptOpen && 'hidden lg:flex',
+        )}>
           <TranscriptEditor
             clip={clip}
             words={words}
             loading={wordsLoading}
             playheadSec={playheadSec}
-            onCutsChange={(cuts) => updateEdits({ cutRanges: cuts.length ? cuts : undefined })}
+            onCutsChange={(cuts) => {
+              // Let the transcript await this specific persistence operation
+              // so its saving/error state reflects IndexedDB, while the other
+              // editor controls keep their existing fire-and-forget autosave.
+              const merged: ClipEdits = {
+                ...(clip.edits ?? {}),
+                cutRanges: cuts.length ? cuts : undefined,
+              };
+              return updateClip(clip.clip_id, { edits: merged });
+            }}
             onSeek={seekToSrcSec}
           />
         </div>
 
         {/* Center: preview + timeline */}
-        <div className="col-span-6 flex flex-col gap-3 min-h-0">
+        <div className="order-1 lg:order-none lg:col-span-6 flex flex-col gap-3 min-h-[34rem] lg:min-h-0">
           {/* ─── Live preview (Remotion — matches the exported video) ───── */}
           <div className="flex-1 rounded-2xl glass hairline-top p-3 flex items-center justify-center overflow-hidden animate-rise min-h-0" style={{ animationDelay: '50ms' }}>
             <div className="relative h-full max-h-full flex items-center justify-center">
@@ -415,6 +540,13 @@ export function EditTab() {
                     autoPlay={false}
                     loop
                   />
+
+                  {exportStyles.show_safe_zones && (
+                    <div aria-hidden className="pointer-events-none absolute inset-[8%_7%] rounded border border-dashed border-white/45 shadow-[inset_0_0_0_999px_rgba(0,0,0,.04)]">
+                      <span className="absolute left-1/2 top-1 -translate-x-1/2 rounded bg-black/60 px-1.5 py-0.5 text-[7px] font-mono text-white/75">SAFE TITLE</span>
+                      <span className="absolute bottom-1 left-1/2 -translate-x-1/2 rounded bg-black/60 px-1.5 py-0.5 text-[7px] font-mono text-white/75">SAFE CAPTIONS</span>
+                    </div>
+                  )}
 
                   {/* Clip index pill (top-left) */}
                   <div className="absolute top-2 left-2 px-2 py-1 rounded-md bg-black/70 backdrop-blur-sm text-white text-[10px] font-mono pointer-events-none">
@@ -472,6 +604,9 @@ export function EditTab() {
             >
               <RotateCcw className="w-4 h-4" />
             </button>
+            <span className="hidden sm:inline text-[10px] text-text-dim" title="Keyboard shortcuts for this editor">
+              Space play/pause · J −5s · K pause · L play · ←/→ frame
+            </span>
           </div>
 
           {/* Timeline */}
@@ -502,12 +637,16 @@ export function EditTab() {
               titleLabel={clip.edits?.customTitle ?? clip.title}
               musicLabel={(project.music_tracks ?? []).find((t) => t.selected)?.filename ?? null}
               logoLabel={project.logo_config?.filename ?? null}
+              transcriptWords={words}
             />
           </div>
         </div>
 
         {/* Right: tools */}
-        <div className="col-span-3 flex flex-col gap-3 min-h-0 overflow-y-auto pr-1">
+        <div className={cn(
+          'order-3 lg:order-none lg:col-span-3 flex flex-col gap-3 min-h-0 max-h-[60vh] lg:max-h-none overflow-y-auto pr-1',
+          !toolsOpen && 'hidden lg:flex',
+        )}>
           <ToolsPanel
             clip={clip}
             updateClip={(patch) => updateClip(clip.clip_id, patch).catch(console.error)}

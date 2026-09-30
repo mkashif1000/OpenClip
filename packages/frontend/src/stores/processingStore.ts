@@ -8,6 +8,7 @@ import { useClipStore } from './clipStore';
 import { useSettingsStore } from './settingsStore';
 
 import { getCurrentProjectId } from './projectStore';
+import { getPerformanceProfile, yieldToBrowser } from '@/services/performanceProfile';
 
 interface ClipProgressData {
   percent: number;
@@ -29,6 +30,16 @@ interface ProcessingState {
   downloadClip: (clipId: string) => void;
   hydrateOutputs: () => Promise<void>;
   reset: () => void;
+  resumeQueue: () => Promise<void>;
+}
+
+const QUEUE_KEY = 'openclip_pending_render_queue';
+type QueueSnapshot = { projectId: string; clipIds: string[]; completed: string[]; failed: string[]; savedAt: string };
+function readQueue(): QueueSnapshot | null {
+  try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || 'null') as QueueSnapshot | null; } catch { return null; }
+}
+function writeQueue(snapshot: QueueSnapshot | null): void {
+  try { if (snapshot) localStorage.setItem(QUEUE_KEY, JSON.stringify(snapshot)); else localStorage.removeItem(QUEUE_KEY); } catch { /* storage is optional */ }
 }
 
 export interface ClipOverride {
@@ -58,6 +69,7 @@ export const useProcessingStore = create<ProcessingState>((set, get) => ({
 
     const targetClips = clips.filter((c) => clipIds.includes(c.clip_id));
     if (!targetClips.length) return;
+    writeQueue({ projectId, clipIds: [...clipIds], completed: [], failed: [], savedAt: new Date().toISOString() });
 
     set((s) => {
       // Only drop in-memory outputs for the clips being (re-)rendered — other
@@ -78,6 +90,7 @@ export const useProcessingStore = create<ProcessingState>((set, get) => ({
     let failed = 0;
     // Whisper word timeline, loaded once per batch (undefined = not loaded yet).
     let whisperWords: Array<{ t0: number; t1: number; text: string }> | null | undefined;
+    const profile = getPerformanceProfile();
 
     // Resolve project styles + per-clip template assignments once up front.
     const { useStyleStore } = await import('./styleStore');
@@ -92,6 +105,9 @@ export const useProcessingStore = create<ProcessingState>((set, get) => ({
 
     for (const clip of targetClips) {
       if (!get().isProcessing) break; // cancelled
+      // Keep the editor responsive between expensive analysis/render phases.
+      // Low-tier devices intentionally render sequentially and yield more often.
+      await yieldToBrowser();
 
       const override = overrides[clip.clip_id];
 
@@ -107,12 +123,13 @@ export const useProcessingStore = create<ProcessingState>((set, get) => ({
       // Box geometry lives in `export`; for a per-clip podcast template pull its
       // geometry so each clip's boxed layout is correct, while keeping global
       // encode settings (format/B-roll/face-tracking/silence) from the project.
-      const boxGeom = podcastStyles
+      const boxStyles = podcastStyles ?? template?.styles;
+      const boxGeom = boxStyles
         ? {
-            box_width: podcastStyles.export.box_width,
-            box_height: podcastStyles.export.box_height,
-            box_y: podcastStyles.export.box_y,
-            box_radius: podcastStyles.export.box_radius,
+            box_width: boxStyles.export.box_width,
+            box_height: boxStyles.export.box_height,
+            box_y: boxStyles.export.box_y,
+            box_radius: boxStyles.export.box_radius,
           }
         : {};
 
@@ -201,11 +218,13 @@ export const useProcessingStore = create<ProcessingState>((set, get) => ({
         // ('pip' here is the region-crops variant from the Edit tab's box
         // editor; legacy pipConfig PIP was handled in the branch above.)
         layoutType = clip.edits.layout;
-      } else if (template?.layout === 'pip' && template.pip_config) {
+      } else if (!clip.edits?.layout && template?.layout === 'pip' && template.pip_config) {
         // Use the assigned template's PIP layout.
         pipConfig = template.pip_config;
         layoutType = 'pip';
       }
+
+      if (!override?.pip && !clip.edits?.layout && template?.layout && template.layout !== 'pip') layoutType = template.layout;
 
       // Resolve music
       const selectedTrack = (project.music_tracks || []).find((t) => t.selected);
@@ -264,7 +283,9 @@ export const useProcessingStore = create<ProcessingState>((set, get) => ({
             videoOpfsId,
             startSec: clip.start_time,
             endSec: clip.end_time,
+            mode: styleConfig.export.face_tracking_mode ?? 'smart',
           });
+          if (profile.tier === 'low') await yieldToBrowser();
         } catch (err) {
           console.warn('Face tracking unavailable, using centered crop:', err);
         }
@@ -380,14 +401,16 @@ export const useProcessingStore = create<ProcessingState>((set, get) => ({
             logoConfig: project.logo_config ?? null,
             musicOpfsId,
             musicVolume: selectedTrack?.volume ?? 0.1,
+            normalizeAudio: !!styleConfig.export.normalize_audio,
+            cleanAudio: !!styleConfig.export.clean_audio,
             outputWidth,
             outputHeight,
             fps,
             keepSegments,
             faceTrack,
             brollPlan,
-            regionCrops: clip.edits?.regionCrops ?? null,
-            layoutRange: clip.edits?.layoutRange ?? null,
+            regionCrops: clip.edits?.regionCrops ?? template?.region_crops ?? null,
+            layoutRange: clip.edits?.layoutRange ?? template?.layout_range ?? null,
           },
           (progress: RenderProgress) => {
             set((s) => ({
@@ -405,6 +428,8 @@ export const useProcessingStore = create<ProcessingState>((set, get) => ({
         );
 
         completed++;
+        const snapshot = readQueue();
+        if (snapshot?.projectId === projectId) { snapshot.completed.push(clip.clip_id); writeQueue(snapshot); }
         const filename = getClipFilename(clip, clip.index);
 
         // Store output blob in memory and update clip status
@@ -441,6 +466,8 @@ export const useProcessingStore = create<ProcessingState>((set, get) => ({
         if (err?.name === 'AbortError') break;
         console.error(`Render failed for clip ${clip.clip_id}:`, err);
         failed++;
+        const snapshot = readQueue();
+        if (snapshot?.projectId === projectId) { snapshot.failed.push(clip.clip_id); writeQueue(snapshot); }
         useClipStore.getState().updateClipStatus(clip.clip_id, 'failed');
         set((s) => ({
           failedClips: s.failedClips + 1,
@@ -453,11 +480,21 @@ export const useProcessingStore = create<ProcessingState>((set, get) => ({
     }
 
     set({ isProcessing: false });
+    const snapshot = readQueue();
+    if (snapshot?.projectId === projectId && snapshot.completed.length + snapshot.failed.length >= snapshot.clipIds.length) writeQueue(null);
   },
 
   cancelRendering: () => {
     cancelRender();
     set({ isProcessing: false });
+  },
+
+  resumeQueue: async () => {
+    const snapshot = readQueue();
+    const projectId = getCurrentProjectId();
+    if (!snapshot || snapshot.projectId !== projectId) return;
+    const remaining = snapshot.clipIds.filter((id) => !snapshot.completed.includes(id));
+    if (remaining.length) await get().renderClips(remaining);
   },
 
   downloadClip: (clipId) => {

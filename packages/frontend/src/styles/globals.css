@@ -205,6 +205,137 @@ button:active:not(:disabled),
   50% { opacity: 0.7; }
 }
 
+@keyframes hero-waveform {
+  0%, 100% { transform: scaleY(.62); opacity: .58; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
+
+@keyframes hero-placeholder-scan {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(530%); }
+}
+
+.hero-copy-enter { animation: fade-in-up .7s cubic-bezier(.2,.8,.2,1) both; }
+
+.hero-heading-gradient {
+  background: linear-gradient(135deg, #c6c6c6 5%, #939393 55%, #6c6c6c);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+}
+
+.hero-heading-break { display: block; height: 0; }
+
+.hero-carousel {
+  --hero-card-width: clamp(238px, 20vw, 288px);
+  --hero-card-height: calc(var(--hero-card-width) * 16 / 9);
+  --hero-orbit-rise: clamp(220px, 22vw, 360px);
+  overflow: hidden;
+  margin-top: 12px;
+}
+
+.hero-carousel-glow {
+  background:
+    radial-gradient(ellipse 32% 36% at 50% 68%, #d4d4d41c, transparent),
+    radial-gradient(ellipse 40% 5% at 50% 86%, #d4d4d415, transparent);
+}
+
+.hero-carousel-stage {
+  height: calc(var(--hero-card-height) + var(--hero-orbit-rise) + 44px);
+  touch-action: pan-y pinch-zoom;
+  cursor: grab;
+}
+
+.hero-carousel-stage:active { cursor: grabbing; }
+
+.hero-clip-card {
+  top: calc(var(--hero-card-height) / 2 + var(--hero-orbit-rise) + 22px);
+  width: var(--hero-card-width);
+  height: var(--hero-card-height);
+  box-shadow: 0 20px 40px #0006, inset 0 1px 0 #ffffff0f;
+  /* The animation loop owns position and fade; CSS easing would cause lag
+     and a visible teleport when an invisible end card is recycled. */
+  transition: box-shadow .4s ease;
+  cursor: pointer;
+  backface-visibility: hidden;
+  will-change: transform, opacity;
+}
+
+.hero-clip-card[data-active="true"] {
+  box-shadow: 0 0 0 1px #d4d4d417, 0 0 42px #d4d4d424, 0 24px 60px #0009;
+}
+
+.hero-clip-card:hover { border-color: #d4d4d480 !important; }
+.hero-clip-card:focus-visible { outline: 2px solid #e5e5e5; outline-offset: 5px; }
+.hero-sample-caption { font-size: clamp(21px, 1.8vw, 26px); }
+
+.hero-carousel-control {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  color: #ffffffad;
+  cursor: pointer;
+}
+
+.hero-carousel-control:hover { background: #ffffff0d; color: #e5e5e5; }
+.hero-carousel-dot { cursor: pointer; }
+.hero-carousel-dot:hover > span { background: #d4d4d4; }
+
+@media (max-width: 767px) {
+  .hero-carousel {
+    --hero-card-width: clamp(218px, 65vw, 278px);
+    --hero-orbit-rise: 100px;
+    margin-top: -64px;
+  }
+  .hero-carousel-control { width: 36px; }
+}
+
+@media (min-width: 768px) and (max-width: 1199px) {
+  .hero-carousel { margin-top: -100px; }
+}
+
+@media (min-width: 1200px) {
+  /* Lift the wings alongside the copy while the middle card stays below it. */
+  .hero-carousel { margin-top: calc(24px - var(--hero-orbit-rise)); }
+}
+
+.hero-wave-bar {
+  width: 2px;
+  min-height: 3px;
+  border-radius: 999px;
+  transform-origin: bottom center;
+  animation: hero-waveform 1.15s ease-in-out infinite;
+  animation-play-state: paused;
+}
+
+.hero-placeholder-grid {
+  background-image:
+    linear-gradient(rgba(255,255,255,.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.08) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: linear-gradient(to bottom, transparent, black 28%, black 72%, transparent);
+}
+
+.hero-placeholder-grid::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 24%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.13), transparent);
+  animation: hero-placeholder-scan 3.8s ease-in-out infinite;
+  animation-play-state: paused;
+}
+
+/* Only the featured card animates; stop when offscreen or explicitly paused. */
+.hero-carousel[data-playing="true"] .hero-clip-card[data-active="true"] .hero-wave-bar,
+.hero-carousel[data-playing="true"] .hero-clip-card[data-active="true"] .hero-placeholder-grid::after {
+  animation-play-state: running;
+}
+
 /* Stagger-friendly animation utility */
 @utility animate-rise {
   animation: fade-in-up 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
@@ -243,10 +374,16 @@ button:active:not(:disabled),
 }
 
 @media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
+  }
+
+  .hero-wave-bar,
+  .hero-placeholder-grid::after {
+    animation-play-state: paused !important;
   }
 }
 
@@ -327,4 +464,14 @@ button:active:not(:disabled),
 .timeline-resize-handle:hover,
 .timeline-resize-handle.resizing {
   background-color: rgba(255, 255, 255, 0.18) !important;
+}
+
+/* Template studio: preview stays visible while the inspector scrolls. */
+.template-preview { height: 100%; width: auto; max-width: 100%; flex-shrink: 1; }
+.template-editor input:focus-visible, .template-editor select:focus-visible, .template-editor textarea:focus-visible {
+  outline: 2px solid #bef264; outline-offset: 2px;
+}
+@media (max-width: 767px) {
+  .template-stage { height: 400px; flex: none; }
+  .template-preview { max-height: 270px; }
 }

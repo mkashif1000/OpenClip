@@ -1,7 +1,7 @@
 /**
- * OpenClip brand mark — a stylized play-glyph inside a rounded film frame.
- * Two-tone: frame uses `currentColor` so it adopts the parent text color,
- * the play cutout takes the surface color so it reads as a notch.
+ * OpenClip's rounded-square mark, matching the shared brand reference.
+ * Explicit colors keep the white frame and dark center consistent on every
+ * surface, regardless of the surrounding text color.
  *
  * Sized via className like a Lucide icon. Defaults to a 1-em square so it
  * matches `font-size` when used inline.
@@ -15,19 +15,15 @@ export function BrandMark({
 }) {
   return (
     <svg
-      viewBox="0 0 24 24"
+      viewBox="0 0 40 40"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
       aria-hidden="true"
+      focusable="false"
     >
-      {/* Frame */}
-      <rect x="2" y="2" width="20" height="20" rx="6" fill="currentColor" />
-      {/* Play triangle */}
-      <path
-        d="M10.2 8.4 L16.4 11.7 a0.35 0.35 0 0 1 0 0.6 L10.2 15.6 a0.35 0.35 0 0 1 -0.55 -0.3 V8.7 a0.35 0.35 0 0 1 0.55 -0.3 Z"
-        fill={cutoutColor}
-      />
+      <rect width="40" height="40" rx="12" fill="#ffffff" />
+      <rect x="12" y="12" width="16" height="16" rx="5" fill={cutoutColor} />
     </svg>
   );
 }

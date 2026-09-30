@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenClip local workflow capture</title>
+    <style>
+      /* Capture-only presentation. Production components and geometry are unchanged. */
+      html { filter: grayscale(1); background: #080808; }
+      *, *::before, *::after {
+        animation: none !important;
+        transition: none !important;
+        scroll-behavior: auto !important;
+        caret-color: transparent !important;
+      }
+      .lucide-sparkles, .lucide-star, .lucide-wand,
+      .lucide-wand-sparkles, .lucide-wand-2 { visibility: hidden !important; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/tests/workflow-capture.tsx"></script>
+  </body>
+</html>

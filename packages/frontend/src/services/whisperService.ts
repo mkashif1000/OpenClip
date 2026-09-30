@@ -13,6 +13,7 @@
 
 import type { SubtitleEntry } from '@/types';
 import { secondsToSrtTime } from '@viral-clipper/shared/utils';
+import { getPerformanceProfile, yieldToBrowser } from './performanceProfile';
 
 export interface WhisperWord {
   t0: number;
@@ -47,7 +48,7 @@ async function getAsr(onModelPct?: (pct: number) => void): Promise<AsrPipeline> 
           onModelPct?.(Math.min(99, Math.round(((p.loaded ?? 0) / p.total) * 100)));
         }
       };
-      const make = (device: 'webgpu' | 'wasm') =>
+        const make = (device: 'webgpu' | 'wasm') =>
         pipeline('automatic-speech-recognition', MODEL_ID, {
           device,
           dtype: 'q8',
@@ -78,8 +79,10 @@ export async function transcribeVideo(opts: {
   durationSec: number;
   signal?: AbortSignal;
   onProgress?: (p: WhisperProgress) => void;
+  language?: string;
 }): Promise<{ srtText: string; words: WhisperWord[]; entries: SubtitleEntry[] }> {
-  const { videoOpfsId, durationSec, signal, onProgress } = opts;
+  const { videoOpfsId, durationSec, signal, onProgress, language = 'auto' } = opts;
+  const segmentSec = getPerformanceProfile().tier === 'low' ? 300 : SEGMENT_SEC;
 
   onProgress?.({ stage: 'model', pct: 0, detail: 'Loading Whisper model' });
   const asr = await getAsr((pct) => onProgress?.({ stage: 'model', pct: Math.round(pct * 0.1), detail: `Downloading model ${pct}%` }));
@@ -87,12 +90,12 @@ export async function transcribeVideo(opts: {
   const { extractPcmF32Mono } = await import('./ffmpegService');
 
   const words: WhisperWord[] = [];
-  const segments = Math.max(1, Math.ceil(durationSec / SEGMENT_SEC));
+  const segments = Math.max(1, Math.ceil(durationSec / segmentSec));
 
   for (let s = 0; s < segments; s++) {
     signal?.throwIfAborted();
-    const base = s * SEGMENT_SEC;
-    const segDur = Math.min(SEGMENT_SEC, durationSec - base);
+    const base = s * segmentSec;
+    const segDur = Math.min(segmentSec, durationSec - base);
     if (segDur <= 0.2) break;
 
     const segPctBase = 10 + (s / segments) * 90;
@@ -106,6 +109,7 @@ export async function transcribeVideo(opts: {
       chunk_length_s: 30,
       stride_length_s: 5,
       return_timestamps: 'word',
+      ...(language !== 'auto' ? { language } : {}),
     });
 
     for (const chunk of result.chunks ?? []) {
@@ -116,6 +120,7 @@ export async function transcribeVideo(opts: {
       words.push({ t0, t1: Math.max(t1, t0 + 0.02), text });
     }
     onProgress?.({ stage: 'transcribe', pct: Math.round(segPctBase + segPctSpan), detail: `Transcribed ${s + 1}/${segments}` });
+    await yieldToBrowser();
   }
 
   const entries = groupWordsIntoEntries(words);

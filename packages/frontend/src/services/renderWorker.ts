@@ -16,6 +16,7 @@ import type { FaceCenter } from './encodeCore';
 import type { ClipData, StyleConfig, PIPConfig } from '@/types';
 import type { LayoutType } from './canvasRenderer';
 import { ensureFontsLoaded } from './fontLoader';
+import type { AutoSplitFrame } from './autoSplitPolicy';
 
 export interface RenderWorkerRequest {
   type: 'render';
@@ -34,6 +35,7 @@ export interface RenderWorkerRequest {
   totalFrames: number;
   frameSrcTimes: Float64Array;
   faceCenters: (FaceCenter | null)[] | null;
+  autoSplitFrames?: (AutoSplitFrame | null)[] | null;
   regionCrops?: Array<{ x: number; y: number; w: number; h: number }> | null;
   layoutRange?: { start: number; end: number } | null;
   demuxStartSec: number;
@@ -82,9 +84,9 @@ ctx.onmessage = async (e: MessageEvent) => {
     // OffscreenCanvas can actually draw them (the document's <link> doesn't
     // reach here). Best-effort — falls back to a system font on failure.
     await ensureFontsLoaded([
-      req.styleConfig?.subtitle?.font_name,
-      req.styleConfig?.title?.font_name,
-      req.clip?.edits?.titleFont,
+      req.styleConfig?.subtitle?.font_name || 'Arial',
+      req.styleConfig?.subtitle?.accent_font_name,
+      req.clip?.edits?.titleFont || req.styleConfig?.title?.font_name || 'Inter',
     ]);
 
     const h264 = await encodeMp4ClipToH264({
@@ -103,6 +105,7 @@ ctx.onmessage = async (e: MessageEvent) => {
       totalFrames: req.totalFrames,
       frameSrcTimes: req.frameSrcTimes,
       faceCenters: req.faceCenters,
+      autoSplitFrames: req.autoSplitFrames ?? null,
       regionCrops: req.regionCrops ?? null,
       layoutRange: req.layoutRange ?? null,
       demuxStartSec: req.demuxStartSec,

@@ -1,25 +1,15 @@
+import { subtitleStyleFromConfig } from '@viral-clipper/shared/rendering/subtitleConfig';
 /**
- * Canvas 2D renderer — replicates all Remotion overlay compositions in pure canvas.
+ * Canvas 2D export renderer — shares overlay drawing and crop geometry with preview.
  * Handles: TitleOverlay, SubtitleOverlay, LogoOverlay, PIP layout.
  */
 
-import type { ClipData, StyleConfig, SubtitleEntry, PIPConfig } from '@/types';
-import { fontStack } from '@/data/fonts';
-import { tierColor } from '@/lib/titleColors';
-
-export type LayoutType =
-  | 'standard'
-  | 'pip'
-  | 'hybrid'
-  | 'gameplay'
-  | 'split-2v'
-  | 'split-2h'
-  | 'split-3'
-  | 'split-4'
-  | 'boxed';
-
-/** Layouts that compose multiple crops of the same source into one output. */
-export const SPLIT_LAYOUTS = new Set<LayoutType>(['gameplay', 'split-2v', 'split-2h', 'split-3', 'split-4']);
+import type { ClipData, StyleConfig, PIPConfig } from '@/types';
+import type { AutoSplitCrop, AutoSplitFrame } from './autoSplitPolicy';
+import { drawTitleOverlay, drawSubtitleOverlay, drawLogoOverlay } from '@viral-clipper/shared/rendering/overlays';
+import { titleStyleFromConfig } from '@viral-clipper/shared/rendering/titleConfig';
+import { getSplitRegions, SPLIT_LAYOUTS, getBoxRect, getRegionRect, getPipRegions, roundRect, type LayoutType } from '@viral-clipper/shared/rendering/geometry';
+export { getSplitRegions, SPLIT_LAYOUTS, type LayoutType } from '@viral-clipper/shared/rendering/geometry';
 
 /** Anything the renderer can sample pixels from (element, decoded frame, bitmap). */
 export type VideoSourceLike = HTMLVideoElement | VideoFrame | ImageBitmap;
@@ -54,6 +44,8 @@ export interface FrameRenderJob {
   height: number;
   /** Normalized (0-1) face center at this frame — pans the crop to keep the speaker centered. */
   faceCenter?: { x: number; y: number } | null;
+  /** Candidate verified against this exact decoded source frame, export only. */
+  autoSplitFrame?: AutoSplitFrame | null;
   /** Extra zoom on the background video (Ken Burns for B-roll). 1 = none. */
   bgZoom?: number;
   /**
@@ -87,8 +79,12 @@ export function renderFrame(job: FrameRenderJob): void {
 
   // ─── Video layer ────────────────────────────────────────────────────────────
   const relativeTime = currentTimeSec - clipStartSec;
+  const autoSplitSeam = layoutType === 'standard' && height > width
+    ? drawAutoSplitLayout(ctx, video, job.autoSplitFrame, width, height, styleConfig.export) : null;
 
-  if ((layoutType === 'hybrid') && relativeTime >= pipStartSec && relativeTime <= pipEndSec && pipConfig) {
+  if (autoSplitSeam !== null) {
+    // The two verified crops have already filled the frame.
+  } else if ((layoutType === 'hybrid') && relativeTime >= pipStartSec && relativeTime <= pipEndSec && pipConfig) {
     drawPIPLayout(ctx, video, pipConfig, width, height, faceCenter);
   } else if (layoutType === 'pip' && pipConfig) {
     drawPIPLayout(ctx, video, pipConfig, width, height, faceCenter);
@@ -146,41 +142,130 @@ export function renderFrame(job: FrameRenderJob): void {
   // ─── Title overlay ──────────────────────────────────────────────────────────
   const titleStyle = styleConfig.title;
   if (clip.title) {
-    drawTitleOverlay(ctx, clip.title, {
-      fontSize: titleStyle.font_size || (width < 800 ? 32 : 22),
-      fontColor: titleStyle.font_color || '#FFFFFF',
-      bgColor: titleStyle.bg_color || '#000000',
-      bgOpacity: titleStyle.bg_opacity ?? 0.75,
-      padding: titleStyle.padding ?? 20,
-      position: titleStyle.position as 'top' | 'center' | 'bottom' || 'top',
-      positionY: titleStyle.position_y,
-      borderRadius: titleStyle.border_radius ?? 6,
-      maxCharsPerLine: titleStyle.max_chars_per_line || (width < 800 ? 25 : 45),
-      maxWidthPct: titleStyle.max_width,
-      fontName: titleStyle.font_name,
-      highlightColor: titleStyle.highlight_color || '#FFD23F',
-      accentColor: titleStyle.accent_color || '#FF4D4D',
-      wordColors: clip.edits?.titleColors,
-    }, width, height);
+    drawTitleOverlay(ctx, clip.title, titleStyleFromConfig(titleStyle, width, height, clip.edits?.titleColors), width, height);
   }
 
   // ─── Subtitle overlay ───────────────────────────────────────────────────────
   const subStyle = styleConfig.subtitle;
   const entries = clip.entries || [];
   if (entries.length > 0) {
-    drawSubtitleOverlay(ctx, entries, currentTimeSec, clipStartSec, {
-      primaryColor: subStyle.primary_color || '#FFFFFF',
-      highlightColor: subStyle.highlight_color || '#FFFF00',
-      outlineColor: subStyle.outline_color || '#000000',
-      outlineWidth: subStyle.outline_width ?? 4,
-      fontSize: subStyle.font_size || (width < 800 ? 62 : 36),
-      fontName: subStyle.font_name || 'Arial',
-      bold: subStyle.bold ?? true,
-      marginV: subStyle.margin_v || (width < 800 ? 120 : 60),
-      maxWidthPct: subStyle.max_width,
-      preset: subStyle.preset,
-    }, width, height);
+    const captionStyle = subtitleStyleFromConfig(subStyle, width, height);
+    if (autoSplitSeam !== null && styleConfig.export?.auto_split_center_captions === true) {
+      // An ephemeral visual-center anchor, not a persisted last-line baseline.
+      // Rebuilding the style every frame restores the user's normal position.
+      captionStyle.visualCenterY = autoSplitSeam;
+      captionStyle.positionX = 50;
+      captionStyle.textAlign = 'center';
+    }
+    drawSubtitleOverlay(ctx, entries, currentTimeSec, clipStartSec, captionStyle, width, height);
   }
+}
+
+/** Reject uncertain timestamps/bounds before drawing either pane. Returns the
+ * actual seam only after drawing. No DOM or VideoFrame global is needed. */
+function drawAutoSplitLayout(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  video: VideoSourceLike,
+  candidate: AutoSplitFrame | null | undefined,
+  width: number,
+  height: number,
+  exportConfig: StyleConfig['export'],
+): number | null {
+  const timestamp = (video as VideoFrame).timestamp;
+  if (!candidate || typeof (video as HTMLVideoElement).videoWidth === 'number'
+    || typeof timestamp !== 'number' || !Number.isFinite(timestamp)
+    || !Number.isFinite(candidate.sourceTimestampUs) || timestamp !== candidate.sourceTimestampUs
+    || !Array.isArray(candidate.crops) || candidate.crops.length !== 2) return null;
+  const { w: vw, h: vh } = sourceSize(video);
+  if (![vw, vh, width, height].every((v) => Number.isFinite(v) && v > 0)) return null;
+  const [a, b] = candidate.crops;
+  if (!isAutoSplitCrop(a) || !isAutoSplitCrop(b)
+    || (a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h)) return null;
+
+  if (candidate.kind === 'screen-share') {
+    if (exportConfig?.auto_split_screen_share !== true
+      || !Number.isFinite(candidate.splitRatio) || candidate.splitRatio !== 0.6) return null;
+    const webcam = candidate.webcam;
+    // Screen content must remain substantial, and the inset must really be a
+    // bounded webcam region, never a full-frame second copy of the source.
+    if (!isAutoSplitCrop(webcam) || webcam.w < 0.08 || webcam.h < 0.12
+      || webcam.w > 0.5 || webcam.h > 0.65 || webcam.w * webcam.h < 0.012
+      || webcam.w * webcam.h > 0.25 || a.w < 0.14 || a.h < 0.14 || a.w * a.h < 0.035
+      || b.x < webcam.x || b.y < webcam.y
+      || b.x + b.w > webcam.x + webcam.w || b.y + b.h > webcam.y + webcam.h
+      || b.w < Math.max(0.04, webcam.w * 0.25)
+      || b.h < Math.max(0.06, webcam.h * 0.25) || b.w * b.h < 0.008) return null;
+    const coveredContent = Math.max(0, Math.min(a.x + a.w, webcam.x + webcam.w) - Math.max(a.x, webcam.x))
+      * Math.max(0, Math.min(a.y + a.h, webcam.y + webcam.h) - Math.max(a.y, webcam.y));
+    if (coveredContent > a.w * a.h * 0.35) return null;
+
+    const seam = height * candidate.splitRatio;
+    const cropW = a.w * vw, cropH = a.h * vh;
+    // Contain the ENTIRE screen crop; cover-fitting here would cut off text.
+    const scale = Math.min(width / cropW, seam / cropH);
+    const fittedW = cropW * scale, fittedH = cropH * scale;
+    const fittedX = (width - fittedW) / 2, fittedY = (seam - fittedH) / 2;
+    ctx.save();
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(video as CanvasImageSource, a.x * vw, a.y * vh, cropW, cropH,
+      fittedX, fittedY, fittedW, fittedH);
+
+    // Remove the original inset only where it intersects the contained screen.
+    // Clip in destination space as well, so the mask cannot bleed into bars or
+    // the lower speaker pane even at fractional-pixel boundaries.
+    const left = Math.max(a.x, webcam.x), top = Math.max(a.y, webcam.y);
+    const right = Math.min(a.x + a.w, webcam.x + webcam.w);
+    const bottom = Math.min(a.y + a.h, webcam.y + webcam.h);
+    if (right > left && bottom > top) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(fittedX, fittedY, fittedW, fittedH);
+      ctx.clip();
+      ctx.fillRect(fittedX + (left - a.x) * vw * scale, fittedY + (top - a.y) * vh * scale,
+        (right - left) * vw * scale, (bottom - top) * vh * scale);
+      ctx.restore();
+    }
+    drawAutoSplitCover(ctx, video, b, vw, vh, 0, seam, width, height - seam);
+    ctx.restore();
+    return seam;
+  }
+
+  // Only the legacy missing discriminator means faces. An unknown mode or
+  // screen-only metadata must not silently fall through to a face layout.
+  if ((candidate.kind !== undefined && candidate.kind !== 'faces')
+    || exportConfig?.auto_split_faces !== true || candidate.webcam !== undefined
+    || (candidate.splitRatio !== undefined && candidate.splitRatio !== 0.5)) return null;
+
+  const halfHeight = height / 2;
+  for (let i = 0; i < 2; i++) {
+    drawAutoSplitCover(ctx, video, candidate.crops[i], vw, vh, 0, i * halfHeight, width, halfHeight);
+  }
+  return halfHeight;
+}
+
+function isAutoSplitCrop(crop: AutoSplitCrop | null | undefined): crop is AutoSplitCrop {
+  return !!crop && [crop.x, crop.y, crop.w, crop.h].every(Number.isFinite)
+    && crop.x >= 0 && crop.y >= 0 && crop.w > 0 && crop.h > 0
+    && crop.x + crop.w <= 1 && crop.y + crop.h <= 1;
+}
+
+function drawAutoSplitCover(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  video: VideoSourceLike,
+  crop: AutoSplitCrop,
+  vw: number, vh: number,
+  x: number, y: number, width: number, height: number,
+): void {
+  const aspect = width / height;
+  const cropW = crop.w * vw, cropH = crop.h * vh;
+  // Cover-fit within each independent crop, never stretch or sample outside
+  // the verified bounds (including tiny aspect differences from rounding).
+  const sw = Math.min(cropW, cropH * aspect);
+  const sh = Math.min(cropH, cropW / aspect);
+  const sx = crop.x * vw + (cropW - sw) / 2;
+  const sy = crop.y * vh + (cropH - sh) / 2;
+  ctx.drawImage(video as CanvasImageSource, sx, sy, sw, sh, x, y, width, height);
 }
 
 // ─── Video frame draw ─────────────────────────────────────────────────────────
@@ -236,8 +321,9 @@ function drawPIPLayout(
 ): void {
   const { contentBox, splitRatio = 60 } = pipConfig;
   let { speakerBox } = pipConfig;
-  const contentHeight = Math.round((height * splitRatio) / 100);
-  const speakerHeight = height - contentHeight;
+  const [content, speaker] = getPipRegions(width, height, splitRatio);
+  const contentHeight = content.h;
+  const speakerHeight = speaker.h;
 
   // Re-center the speaker crop box on the tracked face (box size unchanged,
   // clamped inside the source frame).
@@ -270,83 +356,6 @@ function drawPIPLayout(
 // normalized (0..1) — the helper scales them to the actual output size and to
 // the source's percent-based crop convention used by drawCroppedRegion (0..100).
 
-type Rect01 = { x: number; y: number; w: number; h: number };
-type LayoutRegion = { out: Rect01; src: Rect01 };
-
-function clampRect01(r: Rect01): Rect01 {
-  const x = Math.max(0, Math.min(1, r.x));
-  const y = Math.max(0, Math.min(1, r.y));
-  const w = Math.max(0.05, Math.min(1 - x, r.w));
-  const h = Math.max(0.05, Math.min(1 - y, r.h));
-  return { x, y, w, h };
-}
-
-/**
- * Default regions per split layout. Source crops are sensible defaults — the
- * user can iterate on these later via the Edit tab if we add per-region tuning.
- * `faceCenter` is used by the Gameplay layout so the small face-cam tracks the
- * speaker if face-tracking is on.
- */
-export function getSplitRegions(
-  layout: LayoutType,
-  faceCenter?: { x: number; y: number } | null,
-): LayoutRegion[] {
-  switch (layout) {
-    case 'pip':
-      // Big content view on top + smaller speaker box below. Defaults: content
-      // shows the full frame, speaker crops the center. Keep in sync with
-      // getSplitRegions in MultiSplitComposition (preview == export).
-      return [
-        { out: { x: 0, y: 0, w: 1, h: 0.6 }, src: { x: 0, y: 0, w: 1, h: 1 } },
-        { out: { x: 0, y: 0.6, w: 1, h: 0.4 }, src: clampRect01({ x: 0.3, y: 0.2, w: 0.4, h: 0.6 }) },
-      ];
-    case 'split-2v':
-      // Left/right halves; each shows the matching half of the source so a
-      // 16:9 podcast with two speakers reads naturally as "speaker A | speaker B".
-      return [
-        { out: { x: 0, y: 0, w: 0.5, h: 1 }, src: { x: 0, y: 0, w: 0.5, h: 1 } },
-        { out: { x: 0.5, y: 0, w: 0.5, h: 1 }, src: { x: 0.5, y: 0, w: 0.5, h: 1 } },
-      ];
-    case 'split-2h':
-      // Two-speaker stack: top/bottom rows. Defaults crop each speaker from
-      // the left/right half of a side-by-side 16:9 podcast frame. Keep in sync
-      // with getSplitRegions in MultiSplitComposition (preview == export).
-      return [
-        { out: { x: 0, y: 0, w: 1, h: 0.5 }, src: { x: 0, y: 0.1, w: 0.5, h: 0.8 } },
-        { out: { x: 0, y: 0.5, w: 1, h: 0.5 }, src: { x: 0.5, y: 0.1, w: 0.5, h: 0.8 } },
-      ];
-    case 'split-3':
-      return [
-        { out: { x: 0, y: 0, w: 1 / 3, h: 1 }, src: { x: 0, y: 0, w: 1 / 3, h: 1 } },
-        { out: { x: 1 / 3, y: 0, w: 1 / 3, h: 1 }, src: { x: 1 / 3, y: 0, w: 1 / 3, h: 1 } },
-        { out: { x: 2 / 3, y: 0, w: 1 / 3, h: 1 }, src: { x: 2 / 3, y: 0, w: 1 / 3, h: 1 } },
-      ];
-    case 'split-4':
-      return [
-        { out: { x: 0, y: 0, w: 0.5, h: 0.5 }, src: { x: 0, y: 0, w: 0.5, h: 0.5 } },
-        { out: { x: 0.5, y: 0, w: 0.5, h: 0.5 }, src: { x: 0.5, y: 0, w: 0.5, h: 0.5 } },
-        { out: { x: 0, y: 0.5, w: 0.5, h: 0.5 }, src: { x: 0, y: 0.5, w: 0.5, h: 0.5 } },
-        { out: { x: 0.5, y: 0.5, w: 0.5, h: 0.5 }, src: { x: 0.5, y: 0.5, w: 0.5, h: 0.5 } },
-      ];
-    case 'gameplay': {
-      // Small face-cam on top + main content below. Same source for both, but
-      // the face-cam crop is a tight box around the speaker (face-centered if
-      // we have a track) and the bottom shows the full source.
-      const faceCrop = faceCenter
-        ? clampRect01({ x: faceCenter.x - 0.15, y: Math.max(0, faceCenter.y - 0.2), w: 0.3, h: 0.4 })
-        : { x: 0.35, y: 0.05, w: 0.3, h: 0.4 };
-      return [
-        // Top 35% of output → small face cam
-        { out: { x: 0.2, y: 0, w: 0.6, h: 0.35 }, src: faceCrop },
-        // Bottom 65% of output → full source content
-        { out: { x: 0, y: 0.35, w: 1, h: 0.65 }, src: { x: 0, y: 0, w: 1, h: 1 } },
-      ];
-    }
-    default:
-      return [];
-  }
-}
-
 function drawSplitLayout(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
   video: VideoSourceLike,
@@ -368,10 +377,7 @@ function drawSplitLayout(
       width: src.w * 100,
       height: src.h * 100,
     };
-    const dx = Math.round(region.out.x * width);
-    const dy = Math.round(region.out.y * height);
-    const dw = Math.round(region.out.w * width);
-    const dh = Math.round(region.out.h * height);
+    const { x: dx, y: dy, w: dw, h: dh } = getRegionRect(region.out, width, height);
     drawCroppedRegion(ctx, video, cropBox, dx, dy, dw, dh);
   }
 }
@@ -391,18 +397,9 @@ function drawBoxedLayout(
   boxRadius?: number,
   geom?: { widthPct?: number; heightPct?: number; yPct?: number },
 ): void {
-  // Box geometry (normalized to output, configurable in the template drawer).
-  // Keep in sync with the boxed div in ClipComposition so preview == export.
-  const wPct = geom?.widthPct ?? 84;
-  const hPct = geom?.heightPct ?? 52;
-  const yPct = geom?.yPct ?? 20;
-  const boxW = Math.round(width * (wPct / 100));
-  const boxH = Math.round(height * (hPct / 100));
-  const boxX = Math.round((width - boxW) / 2);
-  const boxY = Math.round(height * (yPct / 100));
-  // `boxRadius` is in OUTPUT px (configurable in the template drawer). Clamp to
-  // half the smaller side (a full pill) so it never inverts.
-  const radius = Math.max(0, Math.min(boxRadius ?? 40, Math.min(boxW, boxH) / 2));
+  const { x: boxX, y: boxY, w: boxW, h: boxH, radius } = getBoxRect(width, height, {
+    widthPct: geom?.widthPct, heightPct: geom?.heightPct, yPct: geom?.yPct, radius: boxRadius,
+  });
 
   // Cover-fit the source into the box, optionally pan toward the face.
   const size = sourceSize(video);
@@ -445,391 +442,4 @@ function drawCroppedRegion(
   ctx.clip();
   ctx.drawImage(video as CanvasImageSource, srcX, srcY, srcW, srcH, dstX, dstY, dstW, dstH);
   ctx.restore();
-}
-
-// ─── Title overlay ────────────────────────────────────────────────────────────
-
-interface TitleStyle {
-  fontSize: number;
-  fontColor: string;
-  bgColor: string;
-  bgOpacity: number;
-  padding: number;
-  position: 'top' | 'center' | 'bottom';
-  positionY?: number | null;
-  borderRadius: number;
-  maxCharsPerLine: number;
-  /** Max title width as a % of frame width. When set, wrap by width. */
-  maxWidthPct?: number;
-  /** Font family — falls back to a safe stack if unset. */
-  fontName?: string;
-  /** Tier-1 / tier-2 word colors (multi-color titles). */
-  highlightColor?: string;
-  accentColor?: string;
-  /** Per-word color tier (0/1/2), aligned to whitespace words of `title`. */
-  wordColors?: number[];
-}
-
-type TitleWord = { text: string; tier: number };
-
-/** Greedily wrap colored words into lines under maxChars (whitespace count). */
-function wrapColoredWords(words: TitleWord[], maxChars: number): TitleWord[][] {
-  const lines: TitleWord[][] = [];
-  let cur: TitleWord[] = [];
-  let len = 0;
-  for (const w of words) {
-    const add = (cur.length ? 1 : 0) + w.text.length;
-    if (cur.length && len + add > maxChars) {
-      lines.push(cur);
-      cur = [];
-      len = 0;
-    }
-    cur.push(w);
-    len += (cur.length > 1 ? 1 : 0) + w.text.length;
-  }
-  if (cur.length) lines.push(cur);
-  return lines;
-}
-
-/** Greedy word-wrap by measured pixel width. `ctx.font` must already be set to
- *  the title font. Mirrors the Remotion preview's max-width wrapping. */
-function wrapColoredWordsByWidth(
-  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
-  words: TitleWord[],
-  maxWidth: number,
-  spaceW: number,
-): TitleWord[][] {
-  const lines: TitleWord[][] = [];
-  let cur: TitleWord[] = [];
-  let curW = 0;
-  for (const w of words) {
-    const wordW = ctx.measureText(w.text).width;
-    const add = cur.length ? spaceW + wordW : wordW;
-    if (cur.length && curW + add > maxWidth) {
-      lines.push(cur);
-      cur = [w];
-      curW = wordW;
-    } else {
-      cur.push(w);
-      curW += add;
-    }
-  }
-  if (cur.length) lines.push(cur);
-  return lines;
-}
-
-function drawTitleOverlay(
-  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
-  title: string,
-  style: TitleStyle,
-  width: number,
-  height: number,
-): void {
-  if (!title) return;
-
-  const rawWords = title.trim().split(/\s+/).filter(Boolean);
-  const words: TitleWord[] = rawWords.map((t, i) => ({ text: t, tier: style.wordColors?.[i] ?? 0 }));
-
-  ctx.font = `bold ${style.fontSize}px ${fontStack(style.fontName)}`;
-  const spaceW = ctx.measureText(' ').width;
-
-  // Width-based wrapping (matches the Remotion preview) when a max width is set;
-  // otherwise fall back to character-count wrapping. The 2.4×padding subtracted
-  // mirrors the box's horizontal padding (padX = padding*1.2 on each side).
-  const wordLines = typeof style.maxWidthPct === 'number'
-    ? wrapColoredWordsByWidth(ctx, words, width * (style.maxWidthPct / 100) - style.padding * 2.4, spaceW)
-    : wrapColoredWords(words, style.maxCharsPerLine);
-
-  const lineHeight = style.fontSize * 1.3;
-  const totalTextH = wordLines.length * lineHeight;
-  const padX = style.padding * 1.2;
-  const padY = style.padding * 0.6;
-  const boxH = totalTextH + padY * 2;
-
-  // Measure each line's pixel width (word widths + inter-word spaces).
-  const lineWidths = wordLines.map((line) =>
-    line.reduce((w, word, idx) => w + ctx.measureText(word.text).width + (idx > 0 ? spaceW : 0), 0),
-  );
-  const maxW = lineWidths.length ? Math.max(...lineWidths) : 0;
-  const boxW = maxW + padX * 2;
-  const boxX = (width - boxW) / 2;
-
-  // Determine Y
-  let boxY: number;
-  if (typeof style.positionY === 'number') {
-    boxY = (style.positionY / 100) * height - boxH / 2;
-  } else if (style.position === 'center') {
-    boxY = (height - boxH) / 2;
-  } else if (style.position === 'bottom') {
-    boxY = height - boxH - style.padding;
-  } else {
-    boxY = style.padding;
-  }
-
-  ctx.save();
-
-  // Background (skip entirely when fully transparent — e.g. boxed/clean templates).
-  if (style.bgOpacity > 0.001) {
-    const { r, g, b } = hexToRgb(style.bgColor);
-    ctx.fillStyle = `rgba(${r},${g},${b},${style.bgOpacity})`;
-    roundRect(ctx, boxX, boxY, boxW, boxH, style.borderRadius);
-    ctx.fill();
-  }
-
-  // Text — draw word by word so each word can carry its own color. Centered
-  // per line by laying out from (center − lineWidth/2).
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'top';
-  const hl = style.highlightColor || '#FFD23F';
-  const ac = style.accentColor || '#FF4D4D';
-  // A subtle shadow keeps light title words legible on bright video when the
-  // background box is transparent.
-  if (style.bgOpacity <= 0.001) {
-    ctx.shadowColor = 'rgba(0,0,0,0.85)';
-    ctx.shadowBlur = Math.max(4, style.fontSize * 0.12);
-    ctx.shadowOffsetY = 2;
-  }
-  wordLines.forEach((line, li) => {
-    let x = width / 2 - lineWidths[li] / 2;
-    const y = boxY + padY + li * lineHeight;
-    line.forEach((word, idx) => {
-      if (idx > 0) x += spaceW;
-      ctx.fillStyle = tierColor(word.tier, style.fontColor, hl, ac);
-      ctx.fillText(word.text, x, y);
-      x += ctx.measureText(word.text).width;
-    });
-  });
-  ctx.restore();
-}
-
-// ─── Subtitle overlay ─────────────────────────────────────────────────────────
-
-interface SubtitleStyle {
-  primaryColor: string;
-  highlightColor: string;
-  outlineColor: string;
-  outlineWidth: number;
-  fontSize: number;
-  fontName: string;
-  bold: boolean;
-  marginV: number;
-  /** Max caption width as a % of frame width (controls wrapping). */
-  maxWidthPct?: number;
-  preset?: string;
-}
-
-function drawSubtitleOverlay(
-  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
-  entries: SubtitleEntry[],
-  currentTimeSec: number,
-  clipStartSec: number,
-  style: SubtitleStyle,
-  width: number,
-  _height: number,
-): void {
-  // Find active entry
-  let activeEntry: SubtitleEntry | null = null;
-  for (const entry of entries) {
-    const start = timeToSec(entry.start) - clipStartSec;
-    const end = timeToSec(entry.end) - clipStartSec;
-    const relTime = currentTimeSec - clipStartSec;
-    if (relTime >= start - 0.05 && relTime <= end + 0.05) {
-      activeEntry = entry;
-      break;
-    }
-  }
-  if (!activeEntry) return;
-
-  const entryStart = Math.max(timeToSec(activeEntry.start) - clipStartSec, 0);
-  const entryEnd = Math.max(timeToSec(activeEntry.end) - clipStartSec, 0);
-  const dur = entryEnd - entryStart;
-  if (dur <= 0) return;
-
-  const relTime = currentTimeSec - clipStartSec;
-  const text = activeEntry.text.trim();
-  const words = text.split(/\s+/);
-  if (!words.length) return;
-
-  // Per-word timing (proportional to character length)
-  const totalChars = words.reduce((s, w) => s + Math.max(w.length, 1), 0);
-  let t = entryStart;
-  const wordSlots = words.map((w) => {
-    const wDur = Math.max(0.04, (w.length / totalChars) * dur);
-    const slot = { start: t, end: t + wDur };
-    t += wDur;
-    return slot;
-  });
-
-  let activeIdx = wordSlots.findIndex((s) => relTime >= s.start && relTime < s.end);
-  if (activeIdx === -1 && relTime >= wordSlots[wordSlots.length - 1]?.start) {
-    activeIdx = wordSlots.length - 1;
-  }
-
-  const preset = style.preset || 'karaoke';
-  const fontWeight = style.bold ? 'bold' : 'normal';
-  const baseFont = `${fontWeight} ${style.fontSize}px ${fontStack(style.fontName)}`;
-  const popFont = `${fontWeight} ${Math.round(style.fontSize * 1.18)}px ${fontStack(style.fontName)}`;
-  ctx.font = baseFont;
-  ctx.textBaseline = 'alphabetic';
-  ctx.textAlign = 'left';
-
-  const upperWords = words.map((w) => w.toUpperCase());
-  const spaceW = ctx.measureText(' ').width;
-  const maxLineWidth = width * ((style.maxWidthPct ?? 90) / 100);
-
-  // Greedy word-wrap so captions never run off the frame. Each item keeps its
-  // global word index (gi) so the active-word styling maps correctly. The
-  // active word in 'pop' is measured at its scaled size so layout stays exact.
-  type Item = { text: string; gi: number; w: number };
-  const fontFor = (gi: number) => (preset === 'pop' && gi === activeIdx ? popFont : baseFont);
-  const measure = (wd: string, gi: number) => {
-    ctx.font = fontFor(gi);
-    const w = ctx.measureText(wd).width;
-    ctx.font = baseFont;
-    return w;
-  };
-  const lines: { items: Item[]; width: number }[] = [];
-  let cur: Item[] = [];
-  let curW = 0;
-  upperWords.forEach((wd, gi) => {
-    const w = measure(wd, gi);
-    const add = cur.length ? spaceW + w : w;
-    if (cur.length && curW + add > maxLineWidth) {
-      lines.push({ items: cur, width: curW });
-      cur = [{ text: wd, gi, w }];
-      curW = w;
-    } else {
-      cur.push({ text: wd, gi, w });
-      curW += add;
-    }
-  });
-  if (cur.length) lines.push({ items: cur, width: curW });
-
-  const lineHeight = style.fontSize * 1.3;
-  const centerX = width / 2;
-  const bottomBaseline = _height - style.marginV; // baseline of the last line
-
-  ctx.lineWidth = style.outlineWidth * 2;
-  ctx.strokeStyle = style.outlineColor;
-  ctx.lineJoin = 'round';
-
-  lines.forEach((line, li) => {
-    const baseline = bottomBaseline - (lines.length - 1 - li) * lineHeight;
-    const startX = centerX - line.width / 2;
-
-    // 'minimal': dark bar behind the whole line, plain text, no outline.
-    if (preset === 'minimal') {
-      const pad = style.fontSize * 0.35;
-      ctx.fillStyle = 'rgba(0,0,0,0.55)';
-      roundRect(ctx, startX - pad, baseline - style.fontSize * 1.05, line.width + pad * 2, style.fontSize * 1.4, 8);
-      ctx.fill();
-      let x = startX;
-      for (const it of line.items) {
-        ctx.fillStyle = style.primaryColor;
-        ctx.fillText(it.text, x, baseline);
-        x += it.w + spaceW;
-      }
-      return;
-    }
-
-    // 'box': pill behind the active word (drawn before text passes).
-    if (preset === 'box') {
-      let x = startX;
-      for (const it of line.items) {
-        if (it.gi === activeIdx) {
-          const pad = style.fontSize * 0.18;
-          ctx.fillStyle = style.highlightColor;
-          roundRect(ctx, x - pad, baseline - style.fontSize * 1.0, it.w + pad * 2, style.fontSize * 1.32, 6);
-          ctx.fill();
-        }
-        x += it.w + spaceW;
-      }
-    }
-
-    // Outline pass (whole line) — skipped for the boxed active word.
-    let x = startX;
-    for (const it of line.items) {
-      ctx.font = fontFor(it.gi);
-      if (!(preset === 'box' && it.gi === activeIdx)) {
-        ctx.strokeText(it.text, x, baseline);
-      }
-      x += it.w + spaceW;
-    }
-
-    // Fill pass with per-preset active-word styling.
-    x = startX;
-    for (const it of line.items) {
-      ctx.font = fontFor(it.gi);
-      const isActive = it.gi === activeIdx;
-      if (preset === 'box') {
-        ctx.fillStyle = isActive ? '#FFFFFF' : style.primaryColor;
-      } else {
-        ctx.fillStyle = isActive ? style.highlightColor : style.primaryColor;
-      }
-      ctx.fillText(it.text, x, baseline);
-      x += it.w + spaceW;
-    }
-    ctx.font = baseFont;
-  });
-}
-
-// ─── Logo overlay ─────────────────────────────────────────────────────────────
-
-function drawLogoOverlay(
-  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
-  logoImg: ImageBitmap | HTMLImageElement,
-  config: { x: number; y: number; size: number; opacity: number },
-  width: number,
-  height: number,
-): void {
-  // Match the Remotion LogoOverlay: width = size% of frame width, height keeps
-  // the logo's natural aspect ratio, centered at (x%, y%).
-  const naturalW = (logoImg as { width?: number }).width || 1;
-  const naturalH = (logoImg as { height?: number }).height || 1;
-  const drawW = (config.size / 100) * width;
-  const drawH = drawW * (naturalH / naturalW);
-  const drawX = (config.x / 100) * width - drawW / 2;
-  const drawY = (config.y / 100) * height - drawH / 2;
-
-  ctx.save();
-  ctx.globalAlpha = config.opacity;
-  ctx.drawImage(logoImg as CanvasImageSource, drawX, drawY, drawW, drawH);
-  ctx.restore();
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function timeToSec(t: string): number {
-  const clean = t.replace(',', '.').trim();
-  const parts = clean.split(':');
-  if (parts.length === 3) return +parts[0] * 3600 + +parts[1] * 60 + +parts[2];
-  if (parts.length === 2) return +parts[0] * 60 + +parts[1];
-  return 0;
-}
-
-function hexToRgb(hex: string): { r: number; g: number; b: number } {
-  const clean = hex.replace('#', '');
-  return {
-    r: parseInt(clean.slice(0, 2), 16) || 0,
-    g: parseInt(clean.slice(2, 4), 16) || 0,
-    b: parseInt(clean.slice(4, 6), 16) || 0,
-  };
-}
-
-function roundRect(
-  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
-  x: number, y: number, w: number, h: number, r: number,
-): void {
-  const radius = Math.min(r, w / 2, h / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + radius, y);
-  ctx.lineTo(x + w - radius, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
-  ctx.lineTo(x + w, y + h - radius);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
-  ctx.lineTo(x + radius, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
-  ctx.lineTo(x, y + radius);
-  ctx.quadraticCurveTo(x, y, x + radius, y);
-  ctx.closePath();
 }

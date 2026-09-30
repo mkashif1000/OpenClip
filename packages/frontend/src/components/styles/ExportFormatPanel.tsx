@@ -70,6 +70,52 @@ export function ExportFormatPanel() {
           </select>
         </div>
       </div>
+
+      <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-input p-3">
+        <input
+          type="checkbox"
+          checked={!!current.normalize_audio}
+          onChange={(e) => setExportSettings({ normalize_audio: e.target.checked })}
+          className="mt-0.5 h-4 w-4 accent-white"
+        />
+        <span>
+          <span className="block text-xs font-medium text-text">Normalize audio for social platforms</span>
+          <span className="mt-1 block text-[10px] leading-4 text-text-muted">Balances speech, music, and source volume around a consistent loudness target.</span>
+        </span>
+      </label>
+
+      <label className="flex items-center justify-between gap-3 rounded-xl border border-border bg-input p-3">
+        <span><span className="block text-xs font-medium text-text">Face tracking strategy</span><span className="mt-1 block text-[10px] text-text-muted">Smart mode follows the same speaker before switching to a clearly closer face.</span></span>
+        <select value={current.face_tracking_mode ?? 'smart'} onChange={(e) => setExportSettings({ face_tracking_mode: e.target.value as 'smart' | 'largest' })} className="rounded-lg border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-text">
+          <option value="smart">Smart speaker</option><option value="largest">Largest face</option>
+        </select>
+      </label>
+
+      <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-input p-3">
+        <input
+          type="checkbox"
+          checked={!!current.clean_audio}
+          onChange={(e) => setExportSettings({ clean_audio: e.target.checked })}
+          className="mt-0.5 h-4 w-4 accent-white"
+        />
+        <span>
+          <span className="block text-xs font-medium text-text">Clean speech audio</span>
+          <span className="mt-1 block text-[10px] leading-4 text-text-muted">Applies a light voice-focused filter to reduce rumble and constant background noise.</span>
+        </span>
+      </label>
+
+      <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-input p-3">
+        <input
+          type="checkbox"
+          checked={!!current.show_safe_zones}
+          onChange={(e) => setExportSettings({ show_safe_zones: e.target.checked })}
+          className="mt-0.5 h-4 w-4 accent-white"
+        />
+        <span>
+          <span className="block text-xs font-medium text-text">Show social safe zones in preview</span>
+          <span className="mt-1 block text-[10px] leading-4 text-text-muted">Preview guide only — guides are never burned into the exported video.</span>
+        </span>
+      </label>
     </div>
   );
 }

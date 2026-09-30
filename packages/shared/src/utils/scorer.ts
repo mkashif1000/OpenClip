@@ -60,6 +60,24 @@ export function scoreViralPotential(entries: SubtitleEntry[]): number {
   return Math.max(score, 0);
 }
 
+/** Human-readable signals behind the score so creators can trust and edit the
+ * AI selection instead of treating the number as a black box. */
+export function explainViralPotential(entries: SubtitleEntry[]): string[] {
+  const text = entries.map((e) => e.text).join(' ').toLowerCase();
+  const reasons: string[] = [];
+  const hasHook = HOOK_KEYWORDS.some((kw) => text.includes(kw));
+  if (hasHook) reasons.push('Strong hook language');
+  if ((text.match(/\?/g) || []).length > 0) reasons.push('Opens a question or creates curiosity');
+  if ((text.match(/[!]/g) || []).length > 0) reasons.push('High emotional emphasis');
+  if (/\b\d[\d,.]*\b/.test(text)) reasons.push('Includes a concrete number or result');
+  const duration = entries.length ? timeToSeconds(entries[entries.length - 1].end) - timeToSeconds(entries[0].start) : 0;
+  if (duration >= 25 && duration <= 50) reasons.push('Short-form sweet-spot length');
+  const last = (entries[entries.length - 1]?.text || '').trim();
+  if (/[!?]$/.test(last) || /\b(that's why|turns out|the answer|exactly)\b/i.test(last)) reasons.push('Has a clear payoff ending');
+  if (/\b(and|but|so|because|which|that|the|a|an|to|of|with|or)[.!?,]*$/i.test(last)) reasons.push('Ending may feel cut off');
+  return reasons.length ? reasons.slice(0, 4) : ['Coherent transcript segment'];
+}
+
 function isSentenceEnd(text: string): boolean {
   const t = text.trim().replace(/["'\u00bb)]+$/, '');
   return t.length > 0 && /[.!?]$/.test(t);
@@ -73,7 +91,7 @@ export function findViralClips(
   topN = 10
 ): Array<{
   start: number; end: number; duration: number; score: number;
-  title: string; preview: string; entries: SubtitleEntry[];
+  title: string; preview: string; entries: SubtitleEntry[]; reasons: string[];
 }> {
   if (!entries.length) return [];
 
@@ -95,7 +113,7 @@ export function findViralClips(
 
   const candidates: Array<{
     start: number; end: number; duration: number; score: number;
-    title: string; preview: string; entries: SubtitleEntry[];
+     title: string; preview: string; entries: SubtitleEntry[]; reasons: string[];
   }> = [];
 
   for (const i of sentenceStarts) {
@@ -119,7 +137,7 @@ export function findViralClips(
           const lengthBonus = duration >= 25 && duration <= 50 ? 4 : 0;
           const score = scoreViralPotential(window) + lengthBonus;
           const preview = window.slice(0, 3).map(e => e.text).join(' ').slice(0, 120);
-          candidates.push({ start: startSec, end: endSec, duration, score, title: '', preview, entries: window });
+           candidates.push({ start: startSec, end: endSec, duration, score, title: '', preview, entries: window, reasons: explainViralPotential(window) });
           break;
         }
       }

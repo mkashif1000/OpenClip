@@ -1,0 +1,107 @@
+import { test, expect, type Page } from '@playwright/test';
+
+async function openStudio(page: Page, query = '') {
+  await page.goto(`/tests/template-editor.html${query}`);
+  await page.getByRole('button', { name: 'Open Style Editor', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Template studio' })).toBeVisible();
+}
+
+test('studio styles, history, saved presets, template storage and applying to clips', async ({ page }, info) => {
+  await page.setViewportSize({ width: 1440, height: 950 });
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await openStudio(page);
+  await expect(page.getByRole('button', { name: /^Use / })).toHaveCount(16);
+  await expect(page.locator('video').first()).toBeVisible();
+  await page.screenshot({ path: info.outputPath('studio-desktop.png') });
+  await page.getByRole('button', { name: 'Use Mint Marker', exact: true }).click();
+  await page.getByRole('tab', { name: 'Captions', exact: true }).click();
+  await expect(page.getByLabel('Highlight animation')).toHaveValue('box');
+  await page.getByLabel('Font size value', { exact: true }).fill('74');
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(page.getByLabel('Font size value', { exact: true })).toHaveValue('58');
+  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  await expect(page.getByLabel('Font size value', { exact: true })).toHaveValue('74');
+  await page.getByLabel('Letter spacing value', { exact: true }).fill('2.5');
+  await page.getByLabel('Rotation value', { exact: true }).fill('-8');
+  await page.getByLabel('Background opacity value', { exact: true }).fill('40');
+  await page.getByRole('tab', { name: 'Title', exact: true }).click();
+  await page.getByLabel('Title text', { exact: true }).fill('My custom headline');
+  await page.getByRole('button', { name: 'Browse 15 title styles' }).click();
+  await expect(page.getByRole('button', { name: /^Use title style/ })).toHaveCount(15);
+  await page.screenshot({ path: info.outputPath('studio-title-styles.png') });
+  await page.getByRole('button', { name: 'Use title style Violet Neon', exact: true }).click();
+  await page.getByRole('button', { name: 'Save current title as a preset' }).click();
+  await page.getByLabel('Preset name', { exact: true }).fill('My Neon Title');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Title preset saved');
+  await page.getByRole('tab', { name: 'Title', exact: true }).click();
+  await expect(page.getByLabel('Title text', { exact: true })).toHaveValue('My custom headline');
+  await page.getByLabel('Title rotation value', { exact: true }).fill('6');
+  await page.getByRole('tab', { name: 'Layout', exact: true }).click();
+  await page.getByRole('button', { name: 'Rounded box', exact: false }).click();
+  await page.getByLabel('Box width value', { exact: true }).fill('79');
+  await page.getByRole('button', { name: 'Save as template', exact: true }).click();
+  await page.getByLabel('Template name', { exact: true }).fill('Mint Studio');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Template saved');
+  await page.getByRole('tab', { name: 'Presets', exact: true }).click();
+  await page.getByRole('button', { name: 'Caption styles', exact: true }).click();
+  await page.getByRole('button', { name: 'Save current captions as a preset' }).click();
+  await page.getByLabel('Preset name', { exact: true }).fill('My Mint');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Use My Mint', exact: true })).toBeVisible();
+  const compare = page.getByRole('button', { name: 'Hold to compare defaults' });
+  await compare.focus();
+  await page.keyboard.down('Space');
+  await expect(page.getByRole('button', { name: 'Showing default styling' })).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.up('Space');
+  await expect(compare).toHaveAttribute('aria-pressed', 'false');
+  await page.getByRole('button', { name: 'Apply to 2 clips', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Template studio' })).toHaveCount(0);
+  const saved = await page.evaluate(() => (window as any).studio.saved());
+  expect(saved.styles.subtitle).toMatchObject({ font_size: 74, rotation: -8, letter_spacing: 2.5, bg_opacity: 0.4, preset: 'box' });
+  expect(saved.styles.title).toMatchObject({ shadow_color: '#CA4DFF', shadow_blur: 24, rotation: 6 });
+  expect(saved.clips[0].edits).toMatchObject({ customTitle: 'My custom headline', layout: 'boxed' });
+  expect(saved.clips[1].edits.layout).toBe('boxed');
+  expect(saved.templates[0]).toMatchObject({ name: 'Mint Studio', layout: 'boxed', styles: { export: { box_width: 79 }, subtitle: { rotation: -8 } } });
+  await page.getByRole('button', { name: 'Open Style Editor', exact: true }).click();
+  await page.getByRole('button', { name: 'Saved', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Use My Mint', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Title styles', exact: true }).click();
+  await page.getByRole('button', { name: 'Saved', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Use title style My Neon Title', exact: true })).toBeVisible();
+  await page.getByRole('tab', { name: 'Layout', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Rounded box', exact: false })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('tab', { name: 'Captions', exact: true }).click();
+  await expect(page.getByLabel('Font size value', { exact: true })).toHaveValue('74');
+  expect(errors).toEqual([]);
+});
+
+test('mobile studio has usable preview and controls without horizontal overflow', async ({ page }, info) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openStudio(page, '?sample');
+  await expect(page.getByLabel('Sample template preview')).toBeVisible();
+  const preview = await page.locator('.template-preview').boundingBox();
+  expect(preview!.width).toBeGreaterThan(100);
+  expect(preview!.height).toBeGreaterThan(200);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath('studio-mobile.png') });
+  await page.getByRole('tab', { name: 'Captions', exact: true }).click();
+  await page.getByLabel('Font size value', { exact: true }).fill('68');
+  await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Settings saved');
+  await page.getByRole('button', { name: 'Back to Templates', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Template studio' })).toHaveCount(0);
+});
+
+test('dashboard shows the getting-started guide and opens templates', async ({ page }, info) => {
+  await page.setViewportSize({ width: 1440, height: 950 });
+  await page.goto('/tests/template-editor.html?dashboard&sample');
+  await expect(page.getByRole('heading', { name: 'Your First Clip in 4 Steps' })).toBeVisible();
+  await page.getByRole('button', { name: 'See How It Works' }).click();
+  await expect(page.getByRole('heading', { name: 'Import & Transcribe' })).toBeInViewport();
+  await page.screenshot({ path: info.outputPath('dashboard-guide.png') });
+  await page.getByRole('navigation', { name: 'Workspace' }).getByRole('button', { name: 'Templates', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Templates', exact: true })).toBeVisible();
+});

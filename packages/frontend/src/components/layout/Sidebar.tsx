@@ -1,10 +1,12 @@
-import { Plus, FolderOpen, ChevronLeft, ChevronRight, Trash2, HardDrive, Pencil } from 'lucide-react';
+import { Plus, FolderOpen, ChevronLeft, ChevronRight, Trash2, HardDrive, Pencil, Download, Upload } from 'lucide-react';
 import { useProjectStore } from '@/stores/projectStore';
 import { useClipStore } from '@/stores/clipStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useEffect, useState } from 'react';
 import { cn } from '@/lib/cn';
 import { opfsGetStorageUsage } from '@/services/opfs';
+import { downloadProjectBackup, readProjectBackup } from '@/services/projectBackup';
+import { getPerformanceProfile } from '@/services/performanceProfile';
 
 export function Sidebar() {
   const { projects, currentProjectId, loadProjects, createProject, selectProject, deleteProject, renameProject } = useProjectStore();
@@ -13,6 +15,10 @@ export function Sidebar() {
   const [storageInfo, setStorageInfo] = useState('');
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
+  const currentProject = useProjectStore((s) => s.currentProject);
+  const clips = useClipStore((s) => s.clips);
+  const fileInput = useState<HTMLInputElement | null>(null);
+  const performance = getPerformanceProfile();
 
   const commitRename = async () => {
     if (renamingId && draftName.trim()) {
@@ -35,6 +41,18 @@ export function Sidebar() {
   const handleNewProject = async () => {
     const project = await createProject(`Project ${projects.length + 1}`);
     setClips(project.clips || []);
+  };
+
+  const handleImportBackup = async (file: File) => {
+    try {
+      const backup = await readProjectBackup(file);
+      const project = await createProject(`${backup.project.name} (restored)`);
+      await useProjectStore.getState().updateCurrentProject({ styles: backup.project.styles });
+      setClips(backup.project.clips.map((clip, index) => ({ ...clip, index, status: 'pending', output_file: null })));
+      await selectProject(project.project_id);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Could not import this backup.');
+    }
   };
 
   const handleSelect = async (id: string) => {
@@ -150,6 +168,34 @@ export function Sidebar() {
           <Plus className="w-4 h-4" strokeWidth={2.25} />
           New Project
         </button>
+        <div className="flex items-center justify-between rounded-lg border border-white/6 bg-white/[.025] px-2.5 py-2 text-[10px] text-text-dim" title="OpenClip adapts previews and scheduling to your device">
+          <span className="flex items-center gap-1.5"><HardDrive className="h-3 w-3" /> {performance.tier === 'low' ? 'Battery saver' : performance.tier === 'balanced' ? 'Balanced mode' : 'Performance mode'}</span>
+          <span className="font-mono text-text-muted">{performance.cores} cores</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            onClick={() => currentProject && downloadProjectBackup(currentProject, clips)}
+            disabled={!currentProject}
+            className="flex items-center justify-center gap-1.5 rounded-lg border border-border py-1.5 text-[11px] text-text-muted hover:bg-white/5 hover:text-text disabled:opacity-40"
+            title="Export project metadata backup"
+          >
+            <Download className="h-3 w-3" /> Backup
+          </button>
+          <button
+            onClick={() => fileInput[0]?.click()}
+            className="flex items-center justify-center gap-1.5 rounded-lg border border-border py-1.5 text-[11px] text-text-muted hover:bg-white/5 hover:text-text"
+            title="Import project metadata backup"
+          >
+            <Upload className="h-3 w-3" /> Restore
+          </button>
+          <input
+            ref={(node) => { fileInput[1](node); }}
+            type="file"
+            accept=".json,.openclip.json,application/json"
+            className="hidden"
+            onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleImportBackup(file); event.currentTarget.value = ''; }}
+          />
+        </div>
         <button
           onClick={handleShowStorage}
           className="w-full flex items-center justify-center gap-2 py-1.5 rounded-lg border border-border text-text-muted hover:text-text hover:bg-white/5 text-xs"

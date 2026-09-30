@@ -61,6 +61,12 @@ export interface ExportSettings {
   crf: number;
   preset: string;
   audio_bitrate: string;
+  /** Split sustained, clear two-person shots after frame-by-frame verification. */
+  auto_split_faces?: boolean;
+  /** Split verified screen shares into content above and an enlarged corner-webcam speaker below. */
+  auto_split_screen_share?: boolean;
+  /** Center enabled captions at the seam only while either automatic split mode is active. */
+  auto_split_center_captions?: boolean;
 }
 
 export interface StyleConfig {
@@ -200,4 +206,7 @@ export const DEFAULT_EXPORT: ExportSettings = {
   crf: 23,
   preset: 'fast',
   audio_bitrate: '128k',
+  auto_split_faces: false,
+  auto_split_screen_share: false,
+  auto_split_center_captions: false,
 };

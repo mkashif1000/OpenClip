@@ -4,7 +4,7 @@
  */
 
 import { openDB, type IDBPDatabase } from 'idb';
-import type { Project, ClipData, StyleConfig, Template } from '@/types';
+import type { Project, ClipData, ClipEdits, StyleConfig, Template } from '@/types';
 import { DEFAULT_SUBTITLE_STYLE, DEFAULT_TITLE_STYLE, DEFAULT_EXPORT } from '@/types';
 
 const DB_NAME = 'openclip-db';
@@ -187,6 +187,30 @@ export async function dbAddClip(projectId: string, clip: ClipData): Promise<void
 export async function dbSaveStyles(projectId: string, styles: StyleConfig): Promise<void> {
   const db = await getDB();
   await db.put('styles', { project_id: projectId, styles });
+}
+
+/** Commit a template's styles and clip layouts together, or leave both untouched. */
+export async function dbApplyTemplate(
+  projectId: string,
+  styles: StyleConfig,
+  edits: Array<{ clip_id: string; edits: ClipEdits }>,
+): Promise<void> {
+  const db = await getDB();
+  const tx = db.transaction(['projects', 'clips', 'styles'], 'readwrite');
+  try {
+    if (!await tx.objectStore('projects').get(projectId)) throw new Error('Project no longer exists');
+    for (const item of edits) {
+      const clip = await tx.objectStore('clips').get(item.clip_id);
+      if (!clip || clip.project_id !== projectId) throw new Error('Clip no longer belongs to this project');
+      await tx.objectStore('clips').put({ ...clip, edits: item.edits });
+    }
+    await tx.objectStore('styles').put({ project_id: projectId, styles });
+    await tx.done;
+  } catch (error) {
+    try { tx.abort(); } catch { /* Already aborted by IndexedDB. */ }
+    await tx.done.catch(() => {});
+    throw error;
+  }
 }
 
 export async function dbGetStyles(projectId: string): Promise<StyleConfig> {

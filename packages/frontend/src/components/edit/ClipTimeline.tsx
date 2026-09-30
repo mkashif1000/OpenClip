@@ -18,9 +18,10 @@
  * (edge drag).
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Trash2, Music as MusicIcon, Image as ImageIcon, Type, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 import type { ClipData, ClipBroll } from '@/types';
+import type { WhisperWord } from '@/services/whisperService';
 import { cn } from '@/lib/cn';
 
 interface Props {
@@ -40,6 +41,8 @@ interface Props {
   logoLabel?: string | null;
   /** The active title (custom override or clip.title) — for the title lane. */
   titleLabel?: string | null;
+  /** Optional word timestamps used to draw a lightweight speech waveform. */
+  transcriptWords?: WhisperWord[] | null;
 }
 
 type DragKind =
@@ -58,7 +61,7 @@ const MIN_CLIP_LEN = 1.0;
 export function ClipTimeline({
   clip, playheadSec, cutRanges, selectedBrollId, onSelectBroll,
   onSeek, onTrim, onBrollChange, onBrollAdd, videoDurationSec,
-  musicLabel, logoLabel, titleLabel,
+  musicLabel, logoLabel, titleLabel, transcriptWords,
 }: Props) {
   const railRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<DragKind>(null);
@@ -239,6 +242,20 @@ export function ClipTimeline({
   };
 
   const brolls = clip.edits?.brolls ?? [];
+  const waveform = useMemo(() => {
+    const count = 64;
+    const bins = Array.from({ length: count }, () => 0);
+    for (const word of transcriptWords ?? []) {
+      if (word.t1 <= clip.start_time || word.t0 >= clip.end_time) continue;
+      const at = Math.max(0, Math.min(0.999, (word.t0 - clip.start_time) / clipDur));
+      const end = Math.max(at, Math.min(0.999, (word.t1 - clip.start_time) / clipDur));
+      const from = Math.floor(at * count);
+      const to = Math.min(count - 1, Math.ceil(end * count));
+      for (let i = from; i <= to; i++) bins[i] += 1;
+    }
+    const max = Math.max(...bins, 1);
+    return bins.map((v, i) => 0.18 + (v / max) * 0.72 + ((i * 17) % 7) / 100);
+  }, [transcriptWords, clip.start_time, clipDur]);
 
   // Live values read INSIDE the once-bound pointer handlers via refs, so the
   // drag listener never re-subscribes mid-drag (re-subscribing dropped pointer
@@ -422,7 +439,7 @@ export function ClipTimeline({
 
       <div ref={railRef} className="relative select-none">
         {/* ─── Time ruler (click/drag to seek) ─────────────────────── */}
-        <div
+           <div
           className="relative h-5 mb-1 cursor-pointer"
           onPointerDown={(e) => {
             e.preventDefault();
@@ -552,6 +569,9 @@ export function ClipTimeline({
               style={{ left: `${stripClamped.left}%`, width: `${Math.max(0.5, stripClamped.width)}%` }}
               onClick={onSourceClick}
             >
+              <div className="absolute inset-x-2 bottom-1 top-1 flex items-center gap-px opacity-60 pointer-events-none" aria-hidden>
+                {waveform.map((height, i) => <span key={i} className="flex-1 rounded-full bg-white/45" style={{ height: `${height * 80}%` }} />)}
+              </div>
               <div className="absolute inset-0 flex items-center px-2 pointer-events-none">
                 <span className="text-[10px] text-text-muted font-medium uppercase tracking-wider">Source</span>
               </div>

@@ -9,6 +9,8 @@
 import type { SubtitleStyle, TitleStyle, CaptionPreset } from '@/types';
 
 export interface TemplateOverride {
+  layoutRange?: { start: number; end: number } | null;
+  layout?: 'standard' | 'boxed' | 'split-2h' | 'split-2v';
   subtitle: SubtitleStyle;
   title: TitleStyle;
   preset: CaptionPreset;

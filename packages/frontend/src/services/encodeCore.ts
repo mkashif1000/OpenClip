@@ -11,6 +11,8 @@
 
 import type { ClipData, StyleConfig, PIPConfig } from '@/types';
 import { renderFrame, type LayoutType, type VideoSourceLike } from './canvasRenderer';
+import { getPerformanceProfile } from './performanceProfile';
+import type { AutoSplitFrame } from './autoSplitPolicy';
 
 export type FaceCenter = { x: number; y: number };
 
@@ -115,6 +117,8 @@ export interface ClipEncodeSpec {
   frameSrcTimes: Float64Array;
   /** Normalized face center per output frame, or null to disable panning. */
   faceCenters: (FaceCenter | null)[] | null;
+  /** Verified split candidates at exact output indices; never interpolated. */
+  autoSplitFrames?: (AutoSplitFrame | null)[] | null;
   /** Per-region source crops for split / gameplay layouts. */
   regionCrops?: Array<{ x: number; y: number; w: number; h: number }> | null;
   layoutRange?: { start: number; end: number } | null;
@@ -150,6 +154,7 @@ export function emitFrame(
     width: spec.outputWidth,
     height: spec.outputHeight,
     faceCenter: spec.faceCenters?.[i] ?? null,
+    autoSplitFrame: spec.autoSplitFrames?.[i] ?? null,
     regionCrops: spec.regionCrops ?? undefined,
     layoutRange: spec.layoutRange ?? undefined,
   });
@@ -217,13 +222,13 @@ export async function encodeMp4ClipToH264(opts: Mp4EncodeOpts): Promise<Uint8Arr
       fps,
       frameTimes: { at: (i: number) => opts.frameSrcTimes[i], total: totalFrames },
       signal,
-      paused: () => encoder.encodeQueueSize > 24,
-      onFrame: (src, i) => {
-        if (encoderError) throw encoderError;
-        emitFrame(encoder, canvas, opts, logoImg, i, src);
-      },
+       paused: () => encoder.encodeQueueSize > getPerformanceProfile().encoderQueueLimit,
+       onFrame: (src, i) => {
+         if (encoderError) throw encoderError;
+         emitFrame(encoder, canvas, opts, logoImg, i, src);
+       },
       onProgress: (done) => onProgress(done),
-    });
+     });
 
     if (encoderError) throw encoderError;
     await encoder.flush();
@@ -317,7 +322,10 @@ export async function encodeWithBrollToH264(opts: BrollEncodeOpts): Promise<Uint
   // Cross-dissolve state: holds the last rendered bitmap of the previous
   // segment, overlaid on the next segment's first DISSOLVE_FRAMES frames with
   // alpha decaying linearly from 1 → 0.
-  const DISSOLVE_FRAMES = Math.max(2, Math.min(6, Math.round(fps * 0.2)));
+  // A held split tail must never leak into an unverified or B-roll frame.
+  const DISSOLVE_FRAMES = (opts.styleConfig.export?.auto_split_faces === true
+    || opts.styleConfig.export?.auto_split_screen_share === true)
+    ? 0 : Math.max(2, Math.min(6, Math.round(fps * 0.2)));
   let tailBitmap: ImageBitmap | null = null;
 
   /**
@@ -345,7 +353,7 @@ export async function encodeWithBrollToH264(opts: BrollEncodeOpts): Promise<Uint
     });
     encoder.encode(vf, { keyFrame: gi % Math.round(fps * 2) === 0 });
     vf.close();
-    if (isLastInSeg && wantNewTail) {
+    if (DISSOLVE_FRAMES > 0 && isLastInSeg && wantNewTail) {
       if (tailBitmap) tailBitmap.close();
       tailBitmap = bitmap; // keep alive for the next segment's fade-in
     } else {
@@ -379,6 +387,9 @@ export async function encodeWithBrollToH264(opts: BrollEncodeOpts): Promise<Uint
           pipStartSec: opts.pipStartSec, pipEndSec: opts.pipEndSec,
           width: opts.outputWidth, height: opts.outputHeight,
           faceCenter: opts.faceCenters?.[gi] ?? null,
+          autoSplitFrame: opts.autoSplitFrames?.[gi] ?? null,
+          regionCrops: opts.regionCrops ?? undefined,
+          layoutRange: opts.layoutRange ?? undefined,
         });
         finalizeFrame(gi, j, j === count - 1, wantTailAtEnd);
         framesDone++;
@@ -430,6 +441,7 @@ export async function encodeWithBrollToH264(opts: BrollEncodeOpts): Promise<Uint
               pipConfig: null, layoutType: 'standard',
               width: opts.outputWidth, height: opts.outputHeight,
               faceCenter: null, bgZoom: z,
+              autoSplitFrame: null, // Stock footage is not the verified source frame.
             });
             finalizeFrame(gi, j, j === count - 1, wantTail);
             framesDone++;

@@ -1,9 +1,8 @@
-import React from 'react';
-import { AbsoluteFill, Audio, Sequence, OffthreadVideo } from 'remotion';
+import type { SubtitleStyle as RenderSubtitleStyle, TitleStyle as RenderTitleStyle } from '../rendering/overlays';
+import { AbsoluteFill, Audio, Sequence, OffthreadVideo, useVideoConfig } from 'remotion';
 import { VideoLayer } from './VideoLayer';
-import { TitleOverlay } from './TitleOverlay';
-import { SubtitleOverlay } from './SubtitleOverlay';
-import { LogoOverlay } from './LogoOverlay';
+import { CompositionOverlays } from './CompositionOverlays';
+import { getBoxRect } from '../rendering/geometry';
 
 /** Single B-roll insert overlaid on the source. */
 export interface BrollInsert {
@@ -19,6 +18,9 @@ interface SubtitleEntry {
 }
 
 export interface ClipCompositionProps {
+  titleEnabled?: boolean;
+  titleStyle?: RenderTitleStyle;
+  subtitleStyle?: RenderSubtitleStyle;
   videoSrc: string;
   title: string;
   entries: SubtitleEntry[];
@@ -79,115 +81,22 @@ export interface ClipCompositionProps {
   subtitlePreset?: string;
 }
 
-export const ClipComposition: React.FC<ClipCompositionProps> = ({
-  videoSrc,
-  title,
-  entries,
-  clipStartSec,
-  musicSrc,
-  musicVolume,
-  logoSrc,
-  logoX,
-  logoY,
-  logoSize,
-  logoOpacity,
-  titleFontSize,
-  titleFontColor,
-  titleBgColor,
-  titleBgOpacity,
-  titlePadding,
-  titlePosition,
-  titlePositionY,
-  titleBorderRadius,
-  titleMaxChars,
-  titleMaxWidthPct,
-  titleFontName,
-  titleHighlightColor,
-  titleAccentColor,
-  titleWordColors,
-  boxed,
-  boxRadiusPx,
-  boxWidthPct,
-  boxHeightPct,
-  boxYPct,
-  subtitleMaxWidthPct,
-  brolls,
-  subtitlePrimaryColor,
-  subtitleHighlightColor,
-  subtitleOutlineColor,
-  subtitleOutlineWidth,
-  subtitleFontSize,
-  subtitleFontName,
-  subtitleBold,
-  subtitleMarginV,
-  subtitlePreset,
-}) => {
-  return (
-    <AbsoluteFill style={{ backgroundColor: 'black' }}>
-      {boxed ? (
-        // Boxed layout — video in a centered rounded inset on black. Geometry
-        // matches drawBoxedLayout in the canvas renderer (left 8%, top 20%,
-        // 84% × 52%) so preview == export.
-        <div
-          style={{
-            position: 'absolute',
-            left: `${(100 - (boxWidthPct ?? 84)) / 2}%`,
-            top: `${boxYPct ?? 20}%`,
-            width: `${boxWidthPct ?? 84}%`,
-            height: `${boxHeightPct ?? 52}%`,
-            borderRadius: boxRadiusPx ?? 40,
-            overflow: 'hidden',
-            backgroundColor: '#000',
-          }}
-        >
-          <VideoLayer videoSrc={videoSrc} clipStartSec={clipStartSec} />
-        </div>
-      ) : (
-        <VideoLayer videoSrc={videoSrc} clipStartSec={clipStartSec} />
-      )}
-      {musicSrc && <Audio src={musicSrc} volume={musicVolume ?? 0.1} />}
-      {/* ── B-roll inserts: each Sequence is rendered ABOVE the source for
-            its window, replacing what the viewer sees. Captions + title +
-            logo render on top so they stay visible during B-roll. ── */}
-      {brolls?.map((b, i) => (
-        <Sequence key={i} from={b.startFrame} durationInFrames={b.durationInFrames} layout="none">
-          <AbsoluteFill style={{ backgroundColor: 'black' }}>
-            <OffthreadVideo src={b.src} style={{ width: '100%', height: '100%', objectFit: 'cover' }} muted />
-          </AbsoluteFill>
-        </Sequence>
-      ))}
-      {logoSrc && <LogoOverlay logoSrc={logoSrc} logoX={logoX} logoY={logoY} logoSize={logoSize} logoOpacity={logoOpacity} />}
-      <TitleOverlay
-        title={title}
-        fontSize={titleFontSize}
-        fontColor={titleFontColor}
-        bgColor={titleBgColor}
-        bgOpacity={titleBgOpacity}
-        padding={titlePadding}
-        position={titlePosition}
-        positionY={titlePositionY}
-        borderRadius={titleBorderRadius}
-        maxCharsPerLine={titleMaxChars}
-        maxWidthPct={titleMaxWidthPct}
-        fontName={titleFontName}
-        highlightColor={titleHighlightColor}
-        accentColor={titleAccentColor}
-        wordColors={titleWordColors}
-      />
-      <SubtitleOverlay
-        entries={entries}
-        clipStartSec={clipStartSec}
-        primaryColor={subtitlePrimaryColor}
-        highlightColor={subtitleHighlightColor}
-        outlineColor={subtitleOutlineColor}
-        outlineWidth={subtitleOutlineWidth}
-        fontSize={subtitleFontSize}
-        fontName={subtitleFontName}
-        bold={subtitleBold}
-        marginV={subtitleMarginV}
-        maxWidthPct={subtitleMaxWidthPct}
-        preset={subtitlePreset}
-      />
-    </AbsoluteFill>
-  );
-};
+export function ClipComposition(props: ClipCompositionProps) {
+  const { videoSrc, clipStartSec, musicSrc, musicVolume, brolls } = props;
+  const { width, height } = useVideoConfig();
+  const box = getBoxRect(width, height, { widthPct: props.boxWidthPct, heightPct: props.boxHeightPct,
+    yPct: props.boxYPct, radius: props.boxRadiusPx });
+  return <AbsoluteFill style={{ backgroundColor: 'black' }}>
+    {props.boxed ? <div style={{ position: 'absolute', left: box.x, top: box.y, width: box.w,
+      height: box.h, borderRadius: box.radius, overflow: 'hidden', backgroundColor: '#000' }}>
+      <VideoLayer videoSrc={videoSrc} clipStartSec={clipStartSec} />
+    </div> : <VideoLayer videoSrc={videoSrc} clipStartSec={clipStartSec} />}
+    {musicSrc && <Audio src={musicSrc} volume={musicVolume ?? 0.1} />}
+    {brolls?.map((b, i) => <Sequence key={i} from={b.startFrame} durationInFrames={b.durationInFrames} layout="none">
+      <AbsoluteFill style={{ backgroundColor: 'black' }}>
+        <OffthreadVideo src={b.src} style={{ width: '100%', height: '100%', objectFit: 'cover' }} muted />
+      </AbsoluteFill>
+    </Sequence>)}
+    <CompositionOverlays {...props} />
+  </AbsoluteFill>;
+}

@@ -1,0 +1,97 @@
+.settings-modal-dialog {
+  position: fixed;
+  inset: 0;
+  box-sizing: border-box;
+  width: min(900px, calc(100% - 48px));
+  max-width: none;
+  height: min(700px, calc(100vh - 64px));
+  height: min(700px, calc(100dvh - 64px));
+  max-height: none;
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #ffffff24;
+  border-radius: 20px;
+  background: #171717;
+  color: #f5f5f5;
+  color-scheme: dark;
+  box-shadow: 0 32px 100px #00000080, inset 0 1px 0 #ffffff05;
+}
+
+.settings-modal-dialog[open] { display: flex; flex-direction: column; animation: settings-modal-enter .16s ease-out; }
+.settings-modal-dialog::backdrop { background: #000000aa; backdrop-filter: blur(5px); }
+
+.settings-modal-header { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 18px; padding: 23px 26px; border-bottom: 1px solid #ffffff12; background: #161616; }
+.settings-modal-heading { display: flex; align-items: center; gap: 13px; min-width: 0; }
+.settings-modal-heading > div { min-width: 0; }
+.settings-modal-icon { display: grid; place-items: center; width: 42px; height: 42px; flex-shrink: 0; border: 1px solid #ffffff1a; border-radius: 12px; background: #ffffff04; color: #d4d4d4; }
+.settings-modal-icon > svg { width: 19px; height: 19px; stroke-width: 1.6; }
+.settings-modal-title { margin: 0; font-size: 20px; line-height: 1.3; font-weight: 600; letter-spacing: -.035em; }
+.settings-modal-description { margin: 5px 0 0; color: #a3a3a3; font-size: 12px; line-height: 1.6; }
+.settings-modal-close { display: grid; place-items: center; flex-shrink: 0; width: 36px; height: 36px; padding: 0; border: 1px solid transparent; border-radius: 9px; background: transparent; color: #a3a3a3; cursor: pointer; }
+.settings-modal-close > svg { width: 18px; height: 18px; }
+.settings-modal-close:hover { color: #f5f5f5; border-color: #ffffff17; background: #ffffff07; }
+
+.settings-modal-layout { display: grid; grid-template-columns: 190px minmax(0, 1fr); flex: 1; min-height: 0; min-width: 0; }
+.settings-modal-sidebar { min-width: 0; min-height: 0; padding: 23px 12px; overflow-y: auto; border-right: 1px solid #ffffff10; background: #121212; }
+.settings-modal-nav-label { margin: 0 11px 13px; color: #999; font-size: 9px; line-height: 1.6; letter-spacing: .13em; text-transform: uppercase; }
+.settings-modal-tabs { display: flex; flex-direction: column; gap: 5px; }
+.settings-modal-tab { display: flex; align-items: center; gap: 9px; min-width: 0; min-height: 43px; padding: 10px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: #aaa; font-size: 12px; line-height: 1.5; text-align: left; white-space: nowrap; cursor: pointer; }
+.settings-modal-tab > svg { width: 16px; height: 16px; flex-shrink: 0; color: #929292; stroke-width: 1.6; }
+.settings-modal-tab:hover { background: #ffffff04; color: #e5e5e5; }
+.settings-modal-tab[aria-selected="true"] { border-color: #ffffff18; background: #ffffff09; color: #f5f5f5; font-weight: 550; box-shadow: inset 0 1px 0 #ffffff03; }
+.settings-modal-tab[aria-selected="true"] > svg { color: #e5e5e5; }
+
+.settings-modal-content { min-height: 0; min-width: 0; overflow: hidden; }
+.settings-modal-panel { box-sizing: border-box; height: 100%; min-height: 0; min-width: 0; padding: 28px 30px 32px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; scroll-padding-block: 24px; }
+.settings-modal-panel[hidden] { display: none; }
+.settings-modal-footer { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 18px; padding: 15px 25px; border-top: 1px solid #ffffff12; background: #131313; }
+.settings-modal-save-note { display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0; color: #a3a3a3; font-size: 11px; line-height: 1.6; }
+.settings-modal-save-note > svg { width: 13px; height: 13px; flex-shrink: 0; color: #929292; }
+.settings-modal-done { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; min-width: 83px; min-height: 38px; padding: 8px 20px; border: 1px solid #f5f5f5; border-radius: 8px; background: #f5f5f5; color: #171717; font-size: 12px; line-height: 1.5; font-weight: 600; cursor: pointer; }
+.settings-modal-done:hover { border-color: #fff; background: #fff; }
+.settings-modal-close:focus-visible,
+.settings-modal-tab:focus-visible,
+.settings-modal-done:focus-visible,
+.settings-modal-panel:focus-visible { outline: 2px solid #f5f5f5; outline-offset: 3px; }
+.settings-modal-panel:focus-visible { outline-color: #999; outline-offset: -3px; border-radius: 0; }
+
+@keyframes settings-modal-enter {
+  from { opacity: 0; transform: translateY(5px) scale(.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Keep this breakpoint in sync with COMPACT_MEDIA in SettingsModal.tsx. */
+@media (max-width: 640px) {
+  .settings-modal-dialog { width: calc(100% - 16px); height: min(700px, calc(100vh - 16px)); height: min(700px, calc(100dvh - 16px)); border-radius: 15px; }
+  .settings-modal-header { gap: 10px; padding: 18px 16px; }
+  .settings-modal-heading { gap: 10px; }
+  .settings-modal-icon { width: 36px; height: 36px; border-radius: 10px; }
+  .settings-modal-icon > svg { width: 17px; height: 17px; }
+  .settings-modal-title { font-size: 19px; }
+  .settings-modal-description { font-size: 11px; }
+  .settings-modal-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .settings-modal-sidebar { padding: 0; overflow: hidden; border-right: 0; border-bottom: 1px solid #ffffff10; }
+  .settings-modal-nav-label { display: none; }
+  .settings-modal-tabs { flex-direction: row; gap: 5px; padding: 9px 12px; overflow-x: auto; overscroll-behavior-x: contain; scroll-padding-inline: 12px; }
+  .settings-modal-tab { flex-shrink: 0; min-height: 40px; padding: 9px 10px; font-size: 11px; }
+  .settings-modal-tab > svg { width: 14px; height: 14px; }
+  .settings-modal-panel { padding: 22px 16px 26px; scroll-padding-block: 18px; }
+  .settings-modal-footer { gap: 12px; padding: 13px 16px; }
+  .settings-modal-save-note { gap: 6px; font-size: 10px; }
+  .settings-modal-done { min-width: 69px; padding-inline: 16px; }
+}
+
+@media (max-height: 520px) {
+  .settings-modal-dialog { height: calc(100vh - 16px); height: calc(100dvh - 16px); }
+  .settings-modal-header { padding-block: 12px; }
+  .settings-modal-description { display: none; }
+  .settings-modal-icon { width: 34px; height: 34px; border-radius: 9px; }
+  .settings-modal-footer { padding-block: 10px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-modal-dialog[open] { animation: none; }
+  .settings-modal-dialog,
+  .settings-modal-dialog * { scroll-behavior: auto; transition: none; }
+}

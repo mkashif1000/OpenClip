@@ -15,6 +15,7 @@
  */
 
 import { createFile, DataStream, MP4BoxBuffer, type Sample } from 'mp4box';
+import { getPerformanceProfile, yieldToBrowser } from './performanceProfile';
 
 export interface DecodeClipJob {
   file: File;
@@ -152,7 +153,8 @@ export async function decodeClipFrames(job: DecodeClipJob): Promise<number> {
 
     while (!doneFeeding && !decodeError && !parseError && pos < file.size) {
       signal.throwIfAborted();
-      while ((decoder.decodeQueueSize > 24 || paused?.()) && !decodeError) {
+      const queueLimit = getPerformanceProfile().encoderQueueLimit;
+      while ((decoder.decodeQueueSize > queueLimit || paused?.()) && !decodeError) {
         await sleep(2);
         signal.throwIfAborted();
       }
@@ -160,6 +162,7 @@ export async function decodeClipFrames(job: DecodeClipJob): Promise<number> {
       const ab = await file.slice(pos, end).arrayBuffer();
       const next = mp4.appendBuffer(MP4BoxBuffer.fromArrayBuffer(ab, pos));
       pos = typeof next === 'number' && next > end ? next : end;
+      await yieldToBrowser();
     }
     if (parseError) throw parseError;
     mp4.flush();
