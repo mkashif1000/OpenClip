@@ -1,4 +1,4 @@
-# ClipForge
+# OpenClip
 
 Turn long-form videos (podcasts, interviews, lectures) into vertical short-form clips with karaoke-style subtitles, title overlays, background music, logo branding, and picture-in-picture layouts — all rendered locally on your machine.
 
@@ -66,8 +66,8 @@ Before you start, make sure these are installed and on your `PATH`:
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/mkashif1000/ClipForge.git
-cd ClipForge
+git clone https://github.com/mkashif1000/OpenClip.git
+cd OpenClip
 ```
 
 ### 2. Install dependencies
@@ -116,7 +116,7 @@ Then open http://localhost:5173
 ## 📂 Project Structure
 
 ```
-ClipForge/
+OpenClip/
 ├── packages/
 │   ├── shared/        # Remotion compositions + shared types/utils
 │   │   └── src/
